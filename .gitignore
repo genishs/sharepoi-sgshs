@@ -1,0 +1,21 @@
+# Gradle files
+.gradle/
+build/
+
+# Android Studio local files
+local.properties
+.idea/caches/
+.idea/libraries/
+.idea/modules.xml
+.idea/workspace.xml
+.idea/nav/
+.idea/assetWizardSettings.xml
+*.iml
+
+# Built metadata
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Log files
+*.log
