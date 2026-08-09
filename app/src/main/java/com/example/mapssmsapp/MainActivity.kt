@@ -101,9 +101,9 @@ class MainActivity : AppCompatActivity() {
             getCurrentLocationAndMark()
         }
 
-        // Restroom Search Listener
+        // Restroom Search Listener (4-in-1 multi-source search)
         btnRestroom.setOnClickListener {
-            fetchNearbyRestrooms()
+            fetchNearbyRestroomsMultiSource()
         }
 
         // Roadview Listener with Seoul fallback
@@ -176,36 +176,61 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun fetchNearbyRestrooms() {
+    // 4-in-1 Multi-Source Restroom Search:
+    // 1. 공중화장실 키워드
+    // 2. 개방화장실 키워드
+    // 3. 관공서 카테고리 (PO3)
+    // 4. 주유소/충전소 개방화장실 카테고리 (OL7)
+    private fun fetchNearbyRestroomsMultiSource() {
         val loc = currentLocation
         val lat = loc?.latitude ?: DEFAULT_LAT
         val lng = loc?.longitude ?: DEFAULT_LNG
 
-        Toast.makeText(this, "주변 2km 내 화장실을 검색 중입니다...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "4가지 데이터 소스(공중/개방/관공서/주유소) 통합 검색 중...", Toast.LENGTH_SHORT).show()
 
         Thread {
             try {
-                val query = URLEncoder.encode("화장실", "UTF-8")
-                val urlString = "https://dapi.kakao.com/v2/local/search/keyword.json?query=$query&x=$lng&y=$lat&radius=2000&sort=distance"
-                val url = URL(urlString)
-                val conn = url.openConnection() as HttpURLConnection
-                conn.requestMethod = "GET"
-                conn.setRequestProperty("Authorization", "KakaoAK ${BuildConfig.KAKAO_REST_API_KEY}")
+                val allDocuments = JSONArray()
+                val seenIds = HashSet<String>()
 
-                val responseCode = conn.responseCode
-                if (responseCode == 200) {
-                    val inputStream = conn.inputStream
-                    val responseText = inputStream.bufferedReader().use { it.readText() }
-                    val jsonObject = JSONObject(responseText)
-                    val documents = jsonObject.getJSONArray("documents")
+                val searchUrls = listOf(
+                    "https://dapi.kakao.com/v2/local/search/keyword.json?query=${URLEncoder.encode("공중화장실", "UTF-8")}&x=$lng&y=$lat&radius=2000&sort=distance",
+                    "https://dapi.kakao.com/v2/local/search/keyword.json?query=${URLEncoder.encode("개방화장실", "UTF-8")}&x=$lng&y=$lat&radius=2000&sort=distance",
+                    "https://dapi.kakao.com/v2/local/search/category.json?category_group_code=PO3&x=$lng&y=$lat&radius=2000&sort=distance",
+                    "https://dapi.kakao.com/v2/local/search/category.json?category_group_code=OL7&x=$lng&y=$lat&radius=2000&sort=distance"
+                )
 
-                    runOnUiThread {
-                        displayRestroomMarkers(documents)
+                for (urlString in searchUrls) {
+                    try {
+                        val url = URL(urlString)
+                        val conn = url.openConnection() as HttpURLConnection
+                        conn.requestMethod = "GET"
+                        conn.setRequestProperty("Authorization", "KakaoAK ${BuildConfig.KAKAO_REST_API_KEY}")
+
+                        if (conn.responseCode == 200) {
+                            val responseText = conn.inputStream.bufferedReader().use { it.readText() }
+                            val jsonObject = JSONObject(responseText)
+                            val docs = jsonObject.getJSONArray("documents")
+
+                            for (i in 0 until docs.length()) {
+                                val item = docs.getJSONObject(i)
+                                val id = item.optString("id", "")
+                                val name = item.optString("place_name", "")
+                                val key = if (id.isNotEmpty()) id else name
+
+                                if (!seenIds.contains(key)) {
+                                    seenIds.add(key)
+                                    allDocuments.put(item)
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
                     }
-                } else {
-                    runOnUiThread {
-                        Toast.makeText(this, "화장실 검색 실패 ($responseCode)", Toast.LENGTH_SHORT).show()
-                    }
+                }
+
+                runOnUiThread {
+                    displayRestroomMarkers(allDocuments)
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -241,7 +266,7 @@ class MainActivity : AppCompatActivity() {
             layer.addLabel(options)
         }
 
-        Toast.makeText(this, "주변 ${count}개의 화장실 위치(초록색 핀)를 표시했습니다!", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "통합 검색 완료! 총 ${count}개의 화장실(초록색 핀)을 표시했습니다.", Toast.LENGTH_LONG).show()
     }
 
     private fun sendLocationSms(phoneNumber: String) {
