@@ -176,11 +176,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    // 4-in-1 Multi-Source Restroom Search:
-    // 1. 공중화장실 키워드
-    // 2. 개방화장실 키워드
-    // 3. 관공서 카테고리 (PO3)
-    // 4. 주유소/충전소 개방화장실 카테고리 (OL7)
     private fun fetchNearbyRestroomsMultiSource() {
         val loc = currentLocation
         val lat = loc?.latitude ?: DEFAULT_LAT
@@ -200,12 +195,15 @@ class MainActivity : AppCompatActivity() {
                     "https://dapi.kakao.com/v2/local/search/category.json?category_group_code=OL7&x=$lng&y=$lat&radius=2000&sort=distance"
                 )
 
+                val kaHeader = "sdk/2.14.1 os/android-34 origin/X8P0djq2A0FbvV77Y1eC1EpJDW8= android_pkg/com.example.mapssmsapp"
+
                 for (urlString in searchUrls) {
                     try {
                         val url = URL(urlString)
                         val conn = url.openConnection() as HttpURLConnection
                         conn.requestMethod = "GET"
                         conn.setRequestProperty("Authorization", "KakaoAK ${BuildConfig.KAKAO_REST_API_KEY}")
+                        conn.setRequestProperty("KA", kaHeader)
 
                         if (conn.responseCode == 200) {
                             val responseText = conn.inputStream.bufferedReader().use { it.readText() }
