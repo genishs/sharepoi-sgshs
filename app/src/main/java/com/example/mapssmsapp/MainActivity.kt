@@ -1,8 +1,11 @@
 package com.example.mapssmsapp
 
 import android.Manifest
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.location.Location
 import android.net.Uri
 import android.os.Bundle
@@ -12,6 +15,7 @@ import android.widget.EditText
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import com.kakao.vectormap.KakaoMap
@@ -166,10 +170,11 @@ class MainActivity : AppCompatActivity() {
 
         val label = currentLocationLabel
         if (label == null) {
+            val bitmap = getBitmapFromVector(this, R.drawable.current_location_marker)
             val styles = map.labelManager?.addLabelStyles(
-                LabelStyles.from(LabelStyle.from(R.drawable.current_location_marker).setAnchorPoint(0.5f, 0.5f))
+                LabelStyles.from(LabelStyle.from(bitmap).setAnchorPoint(0.5f, 0.5f))
             )
-            val options = LabelOptions.from(position).setStyles(styles)
+            val options = LabelOptions.from("current_loc_label", position).setStyles(styles)
             currentLocationLabel = map.labelManager?.layer?.addLabel(options)
         } else {
             label.moveTo(position)
@@ -250,21 +255,36 @@ class MainActivity : AppCompatActivity() {
         val labelManager = map.labelManager ?: return
         val layer = labelManager.layer ?: return
 
+        val bitmap = getBitmapFromVector(this, R.drawable.restroom_marker)
         val styles = labelManager.addLabelStyles(
-            LabelStyles.from(LabelStyle.from(R.drawable.restroom_marker).setAnchorPoint(0.5f, 0.5f))
+            LabelStyles.from(LabelStyle.from(bitmap).setAnchorPoint(0.5f, 0.5f))
         )
 
         for (i in 0 until count) {
             val item = documents.getJSONObject(i)
+            val id = item.optString("id", "restroom_$i")
+            val name = item.optString("place_name", "화장실")
             val itemLat = item.getString("y").toDouble()
             val itemLng = item.getString("x").toDouble()
 
             val position = LatLng.from(itemLat, itemLng)
-            val options = LabelOptions.from(position).setStyles(styles)
+            // Use unique label ID for Kakao Map SDK v2
+            val options = LabelOptions.from("restroom_label_$id", position)
+                .setStyles(styles)
             layer.addLabel(options)
         }
 
-        Toast.makeText(this, "통합 검색 완료! 총 ${count}개의 화장실(초록색 핀)을 표시했습니다.", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "통합 검색 완료! 총 ${count}개의 화장실(초록색 핀)을 지도에 표시했습니다.", Toast.LENGTH_LONG).show()
+    }
+
+    private fun getBitmapFromVector(context: Context, drawableId: Int): Bitmap {
+        val drawable = ContextCompat.getDrawable(context, drawableId)
+            ?: return Bitmap.createBitmap(48, 48, Bitmap.Config.ARGB_8888)
+        val bitmap = Bitmap.createBitmap(48, 48, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        drawable.setBounds(0, 0, canvas.width, canvas.height)
+        drawable.draw(canvas)
+        return bitmap
     }
 
     private fun sendLocationSms(phoneNumber: String) {
