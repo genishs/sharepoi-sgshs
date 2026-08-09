@@ -12,11 +12,6 @@
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.AppCompat">
-        
-        <!-- 구글 맵 API 키 설정 (Secrets Gradle Plugin에 의해 환경 변수에서 자동 주입됨) -->
-        <meta-data
-            android:name="com.google.android.geo.API_KEY"
-            android:value="${MAPS_API_KEY}" />
 
         <activity
             android:name=".MainActivity"

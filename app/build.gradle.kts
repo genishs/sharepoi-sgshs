@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -16,6 +18,15 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        
+        // Reading KAKAO_MAP_API_KEY from local.properties
+        val properties = Properties()
+        val localPropertiesFile = project.rootProject.file("local.properties")
+        if (localPropertiesFile.exists()) {
+            properties.load(localPropertiesFile.inputStream())
+        }
+        val kakaoKey = properties.getProperty("KAKAO_MAP_API_KEY") ?: "DUMMY_KEY"
+        buildConfigField("String", "KAKAO_MAP_API_KEY", "\"${kakaoKey}\"")
     }
 
     buildTypes {
@@ -34,10 +45,14 @@ android {
     kotlinOptions {
         jvmTarget = "17"
     }
+    buildFeatures {
+        buildConfig = true
+    }
 }
 
 dependencies {
-    implementation("com.google.android.gms:play-services-maps:19.0.0")
+    // Kakao Map SDK v2
+    implementation("com.kakao.maps.open:android:2.14.1")
     implementation("com.google.android.gms:play-services-location:21.2.0")
 
     implementation("androidx.core:core-ktx:1.12.0")
