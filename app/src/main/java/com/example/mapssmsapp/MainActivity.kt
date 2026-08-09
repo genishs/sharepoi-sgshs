@@ -25,6 +25,7 @@ import com.kakao.vectormap.MapLifeCycleCallback
 import com.kakao.vectormap.MapView
 import com.kakao.vectormap.camera.CameraUpdateFactory
 import com.kakao.vectormap.label.Label
+import com.kakao.vectormap.label.LabelLayerOptions
 import com.kakao.vectormap.label.LabelOptions
 import com.kakao.vectormap.label.LabelStyle
 import com.kakao.vectormap.label.LabelStyles
@@ -168,14 +169,18 @@ class MainActivity : AppCompatActivity() {
 
         map.moveCamera(CameraUpdateFactory.newCenterPosition(position, 16))
 
+        val labelManager = map.labelManager ?: return
+        val layer = labelManager.getLayer("currentLocLayer")
+            ?: labelManager.addLayer(LabelLayerOptions.from("currentLocLayer").setZOrder(10001))
+
         val label = currentLocationLabel
         if (label == null) {
             val bitmap = getBitmapFromVector(this, R.drawable.current_location_marker)
-            val styles = map.labelManager?.addLabelStyles(
+            val styles = labelManager.addLabelStyles(
                 LabelStyles.from(LabelStyle.from(bitmap).setAnchorPoint(0.5f, 0.5f))
             )
             val options = LabelOptions.from("current_loc_label", position).setStyles(styles)
-            currentLocationLabel = map.labelManager?.layer?.addLabel(options)
+            currentLocationLabel = layer?.addLabel(options)
         } else {
             label.moveTo(position)
         }
@@ -253,7 +258,10 @@ class MainActivity : AppCompatActivity() {
         }
 
         val labelManager = map.labelManager ?: return
-        val layer = labelManager.layer ?: return
+        
+        // Use custom layer with Z-Order 10000 so pins render ON TOP of 3D map tiles
+        val layer = labelManager.getLayer("restroomLayer")
+            ?: labelManager.addLayer(LabelLayerOptions.from("restroomLayer").setZOrder(10000))
 
         val bitmap = getBitmapFromVector(this, R.drawable.restroom_marker)
         val styles = labelManager.addLabelStyles(
@@ -263,18 +271,22 @@ class MainActivity : AppCompatActivity() {
         for (i in 0 until count) {
             val item = documents.getJSONObject(i)
             val id = item.optString("id", "restroom_$i")
-            val name = item.optString("place_name", "화장실")
             val itemLat = item.getString("y").toDouble()
             val itemLng = item.getString("x").toDouble()
 
             val position = LatLng.from(itemLat, itemLng)
-            // Use unique label ID for Kakao Map SDK v2
             val options = LabelOptions.from("restroom_label_$id", position)
                 .setStyles(styles)
-            layer.addLabel(options)
+            layer?.addLabel(options)
         }
 
-        Toast.makeText(this, "통합 검색 완료! 총 ${count}개의 화장실(초록색 핀)을 지도에 표시했습니다.", Toast.LENGTH_LONG).show()
+        // Center camera on the first restroom
+        val firstItem = documents.getJSONObject(0)
+        val firstLat = firstItem.getString("y").toDouble()
+        val firstLng = firstItem.getString("x").toDouble()
+        map.moveCamera(CameraUpdateFactory.newCenterPosition(LatLng.from(firstLat, firstLng), 15))
+
+        Toast.makeText(this, "통합 검색 완료! 총 ${count}개의 화장실(초록색 핀)을 지도 최상단에 표시했습니다.", Toast.LENGTH_LONG).show()
     }
 
     private fun getBitmapFromVector(context: Context, drawableId: Int): Bitmap {
