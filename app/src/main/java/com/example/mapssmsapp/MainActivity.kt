@@ -45,7 +45,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var fusedLocationClient: FusedLocationProviderClient
     private var currentLocation: Location? = null
 
-    // Default Fallback Coords: Magoknaru Station (37.5667, 126.8273)
+    // Default Fixed Location: Magoknaru Station (37.5667, 126.8273)
     private val DEFAULT_LAT = 37.5667
     private val DEFAULT_LNG = 126.8273
 
@@ -87,6 +87,8 @@ class MainActivity : AppCompatActivity() {
         }, object : KakaoMapReadyCallback() {
             override fun onMapReady(map: KakaoMap) {
                 kakaoMap = map
+                // Immediately set initial camera & marker to Magoknaru Station
+                showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
                 getCurrentLocationAndMark()
             }
         })
@@ -103,7 +105,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnMyLocation.setOnClickListener {
-            getCurrentLocationAndMark()
+            showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
         }
 
         // Restroom Search Listener (4-in-1 multi-source search)
@@ -111,7 +113,7 @@ class MainActivity : AppCompatActivity() {
             fetchNearbyRestroomsMultiSource()
         }
 
-        // Roadview Listener with Seoul fallback
+        // Roadview Listener with Magoknaru fallback
         btnRoadview.setOnClickListener {
             val loc = currentLocation
             val lat = loc?.latitude ?: DEFAULT_LAT
@@ -153,9 +155,10 @@ class MainActivity : AppCompatActivity() {
 
         fusedLocationClient.lastLocation.addOnSuccessListener { location: Location? ->
             if (location != null) {
+                // If location is outside Magok / Seoul area (e.g. Gwangmyeong or US default), use Magoknaru Station
+                val lat = if (location.latitude < 33.0 || location.latitude > 39.0 || location.latitude < 37.5) DEFAULT_LAT else location.latitude
+                val lng = if (location.longitude < 124.0 || location.longitude > 132.0 || location.longitude < 126.8) DEFAULT_LNG else location.longitude
                 currentLocation = location
-                val lat = if (location.latitude < 33.0 || location.latitude > 39.0) DEFAULT_LAT else location.latitude
-                val lng = if (location.longitude < 124.0 || location.longitude > 132.0) DEFAULT_LNG else location.longitude
                 showLocationOnMap(lat, lng)
             } else {
                 showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
@@ -191,7 +194,7 @@ class MainActivity : AppCompatActivity() {
         val lat = loc?.latitude ?: DEFAULT_LAT
         val lng = loc?.longitude ?: DEFAULT_LNG
 
-        Toast.makeText(this, "4가지 데이터 소스(공중/개방/관공서/주유소) 통합 검색 중...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "마곡나루역 주변 4가지 소스(공중/개방/관공서/주유소) 통합 검색 중...", Toast.LENGTH_SHORT).show()
 
         Thread {
             try {
@@ -259,7 +262,6 @@ class MainActivity : AppCompatActivity() {
 
         val labelManager = map.labelManager ?: return
         
-        // Use custom layer with Z-Order 10000 so pins render ON TOP of 3D map tiles
         val layer = labelManager.getLayer("restroomLayer")
             ?: labelManager.addLayer(LabelLayerOptions.from("restroomLayer").setZOrder(10000))
 
@@ -280,13 +282,12 @@ class MainActivity : AppCompatActivity() {
             layer?.addLabel(options)
         }
 
-        // Center camera on the first restroom
         val firstItem = documents.getJSONObject(0)
         val firstLat = firstItem.getString("y").toDouble()
         val firstLng = firstItem.getString("x").toDouble()
         map.moveCamera(CameraUpdateFactory.newCenterPosition(LatLng.from(firstLat, firstLng), 15))
 
-        Toast.makeText(this, "통합 검색 완료! 총 ${count}개의 화장실(초록색 핀)을 지도 최상단에 표시했습니다.", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "통합 검색 완료! 총 ${count}개의 화장실(초록색 핀)을 표시했습니다.", Toast.LENGTH_LONG).show()
     }
 
     private fun getBitmapFromVector(context: Context, drawableId: Int): Bitmap {
