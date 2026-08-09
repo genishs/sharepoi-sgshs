@@ -1,8 +1,10 @@
 package com.example.mapssmsapp
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.location.Location
+import android.net.Uri
 import android.os.Bundle
 import android.telephony.SmsManager
 import android.widget.Button
@@ -35,6 +37,10 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var etPhoneNumber: EditText
     private lateinit var btnSendSms: Button
+    private lateinit var btnRoadview: Button
+    private lateinit var btnZoomIn: Button
+    private lateinit var btnZoomOut: Button
+    private lateinit var btnMyLocation: Button
 
     private val PERMISSION_REQUEST_CODE = 1000
 
@@ -48,14 +54,16 @@ class MainActivity : AppCompatActivity() {
 
         etPhoneNumber = findViewById(R.id.etPhoneNumber)
         btnSendSms = findViewById(R.id.btnSendSms)
+        btnRoadview = findViewById(R.id.btnRoadview)
+        btnZoomIn = findViewById(R.id.btnZoomIn)
+        btnZoomOut = findViewById(R.id.btnZoomOut)
+        btnMyLocation = findViewById(R.id.btnMyLocation)
 
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
 
         mapView = findViewById(R.id.mapView)
         mapView.start(object : MapLifeCycleCallback() {
-            override fun onMapDestroy() {
-                // Map destroyed
-            }
+            override fun onMapDestroy() {}
 
             override fun onMapError(error: Exception?) {
                 Toast.makeText(this@MainActivity, "지도를 로드하는 중 오류가 발생했습니다.", Toast.LENGTH_SHORT).show()
@@ -68,6 +76,31 @@ class MainActivity : AppCompatActivity() {
         })
 
         checkAndRequestPermissions()
+
+        // Zoom Control Listeners
+        btnZoomIn.setOnClickListener {
+            kakaoMap?.moveCamera(CameraUpdateFactory.zoomIn())
+        }
+
+        btnZoomOut.setOnClickListener {
+            kakaoMap?.moveCamera(CameraUpdateFactory.zoomOut())
+        }
+
+        btnMyLocation.setOnClickListener {
+            getCurrentLocationAndMark()
+        }
+
+        // Roadview Listener
+        btnRoadview.setOnClickListener {
+            val location = currentLocation
+            if (location != null) {
+                val roadviewUrl = "https://map.kakao.com/link/roadview/${location.latitude},${location.longitude}"
+                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(roadviewUrl))
+                startActivity(intent)
+            } else {
+                Toast.makeText(this, "위치 정보를 읽어오는 중입니다. 잠시 후 다시 시도해 주세요.", Toast.LENGTH_SHORT).show()
+            }
+        }
 
         btnSendSms.setOnClickListener {
             val phone = etPhoneNumber.text.toString().trim()
@@ -108,19 +141,16 @@ class MainActivity : AppCompatActivity() {
         val map = kakaoMap ?: return
         val position = LatLng.from(latitude, longitude)
 
-        // Move camera to current position (Zoom level 16)
         map.moveCamera(CameraUpdateFactory.newCenterPosition(position, 16))
 
         val label = currentLocationLabel
         if (label == null) {
-            // Create label style
             val styles = map.labelManager?.addLabelStyles(
                 LabelStyles.from(LabelStyle.from(R.drawable.current_location_marker).setAnchorPoint(0.5f, 0.5f))
             )
             val options = LabelOptions.from(position).setStyles(styles)
             currentLocationLabel = map.labelManager?.layer?.addLabel(options)
         } else {
-            // Move existing label
             label.moveTo(position)
         }
     }
@@ -137,7 +167,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val mapLink = "https://maps.google.com/?q=${location.latitude},${location.longitude}"
+        val mapLink = "https://map.kakao.com/link/map/${location.latitude},${location.longitude}"
         val message = "[내 위치 전송]\n현재 제 위치는 이곳입니다:\n$mapLink"
 
         try {
