@@ -57,41 +57,66 @@
             android:textColor="#000000" />
     </LinearLayout>
 
-    <!-- 하단 입력 및 전송/로드뷰 영역 -->
+    <!-- 하단 입력 및 전송/로드뷰/화장실 영역 -->
     <LinearLayout
         android:id="@+id/bottomArea"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:padding="16dp"
+        android:orientation="vertical"
+        android:padding="12dp"
         android:background="#FFFFFF"
         app:layout_constraintBottom_toBottomOf="parent"
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintEnd_toEndOf="parent">
 
-        <EditText
-            android:id="@+id/etPhoneNumber"
-            android:layout_width="0dp"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:hint="전송할 전화번호 입력"
-            android:inputType="phone" />
+            android:orientation="horizontal"
+            android:layout_marginBottom="8dp">
 
-        <Button
-            android:id="@+id/btnRoadview"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:text="📷 로드뷰"
-            android:backgroundTint="#FEE500"
-            android:textColor="#000000" />
+            <Button
+                android:id="@+id/btnRestroom"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="🚽 근처 화장실 찾기"
+                android:backgroundTint="#2E7D32"
+                android:textColor="#FFFFFF"
+                android:layout_marginEnd="4dp" />
 
-        <Button
-            android:id="@+id/btnSendSms"
-            android:layout_width="wrap_content"
+            <Button
+                android:id="@+id/btnRoadview"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="📷 로드뷰"
+                android:backgroundTint="#FEE500"
+                android:textColor="#000000"
+                android:layout_marginStart="4dp" />
+        </LinearLayout>
+
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginStart="8dp"
-            android:text="위치 전송" />
+            android:orientation="horizontal">
+
+            <EditText
+                android:id="@+id/etPhoneNumber"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:hint="전송할 전화번호 입력"
+                android:inputType="phone" />
+
+            <Button
+                android:id="@+id/btnSendSms"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="8dp"
+                android:text="위치 전송" />
+        </LinearLayout>
+
     </LinearLayout>
 
 </androidx.constraintlayout.widget.ConstraintLayout>

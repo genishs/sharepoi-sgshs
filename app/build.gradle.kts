@@ -19,14 +19,16 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
-        // Reading KAKAO_MAP_API_KEY from local.properties
         val properties = Properties()
         val localPropertiesFile = project.rootProject.file("local.properties")
         if (localPropertiesFile.exists()) {
             properties.load(localPropertiesFile.inputStream())
         }
-        val kakaoKey = properties.getProperty("KAKAO_MAP_API_KEY") ?: "DUMMY_KEY"
-        buildConfigField("String", "KAKAO_MAP_API_KEY", "\"${kakaoKey}\"")
+        val kakaoMapKey = properties.getProperty("KAKAO_MAP_API_KEY") ?: "DUMMY_KEY"
+        val kakaoRestKey = properties.getProperty("KAKAO_REST_API_KEY") ?: properties.getProperty("KAKAO_MAP_API_KEY") ?: "DUMMY_KEY"
+        
+        buildConfigField("String", "KAKAO_MAP_API_KEY", "\"${kakaoMapKey}\"")
+        buildConfigField("String", "KAKAO_REST_API_KEY", "\"${kakaoRestKey}\"")
     }
 
     buildTypes {
@@ -51,7 +53,6 @@ android {
 }
 
 dependencies {
-    // Kakao Map SDK v2
     implementation("com.kakao.maps.open:android:2.14.1")
     implementation("com.google.android.gms:play-services-location:21.2.0")
 
