@@ -13,6 +13,7 @@ import android.telephony.SmsManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
@@ -43,7 +44,6 @@ class MainActivity : AppCompatActivity() {
     private var currentLocationLabel: Label? = null
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
-    private var currentLocation: Location? = null
 
     // Default Fixed Location: Magoknaru Station (37.5667, 126.8273)
     private val DEFAULT_LAT = 37.5667
@@ -87,8 +87,36 @@ class MainActivity : AppCompatActivity() {
         }, object : KakaoMapReadyCallback() {
             override fun onMapReady(map: KakaoMap) {
                 kakaoMap = map
-                // Immediately set initial camera & marker to Magoknaru Station
                 showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
+
+                // Label Click Listener for Restroom Markers
+                map.setOnLabelClickListener { _, _, label ->
+                    val item = label.tag as? JSONObject
+                    if (item != null) {
+                        val name = item.optString("place_name", "화장실")
+                        val roadAddress = item.optString("road_address_name", "")
+                        val address = if (roadAddress.isNotEmpty()) roadAddress else item.optString("address_name", "주소 정보 없음")
+                        val phone = item.optString("phone", "전화번호 정보 없음")
+                        val phoneDisplay = if (phone.isEmpty()) "전화번호 정보 없음" else phone
+                        val lat = item.optString("y", "37.5667").toDouble()
+                        val lng = item.optString("x", "126.8273").toDouble()
+
+                        AlertDialog.Builder(this@MainActivity)
+                            .setTitle("🚽 $name")
+                            .setMessage("📍 주소: $address\n📞 전화: $phoneDisplay")
+                            .setPositiveButton("📷 로드뷰 보기") { _, _ ->
+                                val roadviewUrl = "https://map.kakao.com/link/roadview/$lat,$lng"
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(roadviewUrl))
+                                startActivity(intent)
+                            }
+                            .setNegativeButton("닫기", null)
+                            .show()
+
+                        true
+                    } else {
+                        false
+                    }
+                }
             }
         })
 
@@ -107,7 +135,7 @@ class MainActivity : AppCompatActivity() {
             showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
         }
 
-        // Restroom Search Listener (4-in-1 multi-source search around current camera center)
+        // Restroom Search Listener (4-in-1 multi-source search)
         btnRestroom.setOnClickListener {
             fetchNearbyRestroomsMultiSource()
         }
@@ -143,10 +171,6 @@ class MainActivity : AppCompatActivity() {
         mapView.pause()
     }
 
-    private fun getCurrentLocationAndMark() {
-        showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
-    }
-
     private fun showLocationOnMap(latitude: Double, longitude: Double) {
         val map = kakaoMap ?: return
         val position = LatLng.from(latitude, longitude)
@@ -171,12 +195,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun fetchNearbyRestroomsMultiSource() {
-        // Use current camera center on map (which is initialized to Magoknaru Station)
         val cameraPos = kakaoMap?.cameraPosition?.position
         val lat = cameraPos?.latitude ?: DEFAULT_LAT
         val lng = cameraPos?.longitude ?: DEFAULT_LNG
 
-        Toast.makeText(this, "현재 지도 중심 주변 4가지 소스(공중/개방/관공서/주유소) 통합 검색 중...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "지도 중심 주변 4가지 소스(공중/개방/관공서/주유소) 통합 검색 중...", Toast.LENGTH_SHORT).show()
 
         Thread {
             try {
@@ -259,12 +282,15 @@ class MainActivity : AppCompatActivity() {
             val itemLng = item.getString("x").toDouble()
 
             val position = LatLng.from(itemLat, itemLng)
+            // Attach item JSONObject as Tag
             val options = LabelOptions.from("restroom_label_$id", position)
                 .setStyles(styles)
+                .setTag(item)
+
             layer?.addLabel(options)
         }
 
-        Toast.makeText(this, "검색 완료! 지도 중심 주변 ${count}개의 화장실(초록색 핀)을 표시했습니다.", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "검색 완료! 총 ${count}개의 화장실(초록색 핀)을 표시했습니다. 핀을 터치해 상세 정보를 확인하세요!", Toast.LENGTH_LONG).show()
     }
 
     private fun getBitmapFromVector(context: Context, drawableId: Int): Bitmap {
