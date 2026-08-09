@@ -89,7 +89,6 @@ class MainActivity : AppCompatActivity() {
                 kakaoMap = map
                 // Immediately set initial camera & marker to Magoknaru Station
                 showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
-                getCurrentLocationAndMark()
             }
         })
 
@@ -108,21 +107,18 @@ class MainActivity : AppCompatActivity() {
             showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
         }
 
-        // Restroom Search Listener (4-in-1 multi-source search)
+        // Restroom Search Listener (4-in-1 multi-source search around current camera center)
         btnRestroom.setOnClickListener {
             fetchNearbyRestroomsMultiSource()
         }
 
         // Roadview Listener with Magoknaru fallback
         btnRoadview.setOnClickListener {
-            val loc = currentLocation
-            val lat = loc?.latitude ?: DEFAULT_LAT
-            val lng = loc?.longitude ?: DEFAULT_LNG
-            
-            val finalLat = if (lat < 33.0 || lat > 39.0 || lng < 124.0 || lng > 132.0) DEFAULT_LAT else lat
-            val finalLng = if (lat < 33.0 || lat > 39.0 || lng < 124.0 || lng > 132.0) DEFAULT_LNG else lng
+            val cameraPos = kakaoMap?.cameraPosition?.position
+            val lat = cameraPos?.latitude ?: DEFAULT_LAT
+            val lng = cameraPos?.longitude ?: DEFAULT_LNG
 
-            val roadviewUrl = "https://map.kakao.com/link/roadview/$finalLat,$finalLng"
+            val roadviewUrl = "https://map.kakao.com/link/roadview/$lat,$lng"
             val intent = Intent(Intent.ACTION_VIEW, Uri.parse(roadviewUrl))
             startActivity(intent)
         }
@@ -148,22 +144,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun getCurrentLocationAndMark() {
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
-            showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
-            return
-        }
-
-        fusedLocationClient.lastLocation.addOnSuccessListener { location: Location? ->
-            if (location != null) {
-                // If location is outside Magok / Seoul area (e.g. Gwangmyeong or US default), use Magoknaru Station
-                val lat = if (location.latitude < 33.0 || location.latitude > 39.0 || location.latitude < 37.5) DEFAULT_LAT else location.latitude
-                val lng = if (location.longitude < 124.0 || location.longitude > 132.0 || location.longitude < 126.8) DEFAULT_LNG else location.longitude
-                currentLocation = location
-                showLocationOnMap(lat, lng)
-            } else {
-                showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
-            }
-        }
+        showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
     }
 
     private fun showLocationOnMap(latitude: Double, longitude: Double) {
@@ -190,11 +171,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun fetchNearbyRestroomsMultiSource() {
-        val loc = currentLocation
-        val lat = loc?.latitude ?: DEFAULT_LAT
-        val lng = loc?.longitude ?: DEFAULT_LNG
+        // Use current camera center on map (which is initialized to Magoknaru Station)
+        val cameraPos = kakaoMap?.cameraPosition?.position
+        val lat = cameraPos?.latitude ?: DEFAULT_LAT
+        val lng = cameraPos?.longitude ?: DEFAULT_LNG
 
-        Toast.makeText(this, "마곡나루역 주변 4가지 소스(공중/개방/관공서/주유소) 통합 검색 중...", Toast.LENGTH_SHORT).show()
+        Toast.makeText(this, "현재 지도 중심 주변 4가지 소스(공중/개방/관공서/주유소) 통합 검색 중...", Toast.LENGTH_SHORT).show()
 
         Thread {
             try {
@@ -282,12 +264,7 @@ class MainActivity : AppCompatActivity() {
             layer?.addLabel(options)
         }
 
-        val firstItem = documents.getJSONObject(0)
-        val firstLat = firstItem.getString("y").toDouble()
-        val firstLng = firstItem.getString("x").toDouble()
-        map.moveCamera(CameraUpdateFactory.newCenterPosition(LatLng.from(firstLat, firstLng), 15))
-
-        Toast.makeText(this, "통합 검색 완료! 총 ${count}개의 화장실(초록색 핀)을 표시했습니다.", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "검색 완료! 지도 중심 주변 ${count}개의 화장실(초록색 핀)을 표시했습니다.", Toast.LENGTH_LONG).show()
     }
 
     private fun getBitmapFromVector(context: Context, drawableId: Int): Bitmap {
@@ -306,9 +283,9 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
-        val location = currentLocation
-        val lat = location?.latitude ?: DEFAULT_LAT
-        val lng = location?.longitude ?: DEFAULT_LNG
+        val cameraPos = kakaoMap?.cameraPosition?.position
+        val lat = cameraPos?.latitude ?: DEFAULT_LAT
+        val lng = cameraPos?.longitude ?: DEFAULT_LNG
 
         val mapLink = "https://map.kakao.com/link/map/$lat,$lng"
         val message = "[내 위치 전송]\n현재 제 위치는 이곳입니다:\n$mapLink"
@@ -355,7 +332,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             if (allGranted) {
-                getCurrentLocationAndMark()
+                showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
             } else {
                 Toast.makeText(this, "필요한 권한이 거부되어 일부 기능이 제한됩니다.", Toast.LENGTH_SHORT).show()
             }
