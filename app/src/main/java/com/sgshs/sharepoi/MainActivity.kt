@@ -1,6 +1,8 @@
 package com.sgshs.sharepoi
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -15,6 +17,7 @@ import android.util.Base64
 import android.util.Log
 import android.widget.Button
 import android.widget.EditText
+import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -94,12 +97,9 @@ class MainActivity : AppCompatActivity() {
             override fun onMapDestroy() {}
 
             override fun onMapError(error: Exception?) {
-                Log.e("MainActivity", "Kakao map error", error)
-                Toast.makeText(
-                    this@MainActivity,
-                    "지도를 로드하는 중 오류: ${error?.javaClass?.simpleName}: ${error?.message}",
-                    Toast.LENGTH_LONG
-                ).show()
+                val diagnosticText = buildAuthDiagnosticText(error)
+                Log.e("MainActivity", "Kakao map error diagnostic:\n$diagnosticText", error)
+                showAuthDiagnosticDialog(diagnosticText)
             }
         }, object : KakaoMapReadyCallback() {
             override fun onMapReady(map: KakaoMap) {
@@ -288,6 +288,88 @@ class MainActivity : AppCompatActivity() {
             Log.w("MainActivity", "Failed to compute signing key hash for KA header", e)
             ""
         }
+    }
+
+    /**
+     * 설치된 앱의 서명 인증서 전부(멀티 서명 포함)에 대한 SHA-1 키 해시(Base64, NO_WRAP) 목록을 계산한다.
+     * API28+ 에서는 signingInfo.apkContentsSigners 전부를, 그 이하에서는 signatures 전부를 사용한다.
+     */
+    private fun computeAllSignerHashes(): List<String> {
+        val pkgName = packageName
+
+        return try {
+            val signatures = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                val signingInfo = packageManager.getPackageInfo(
+                    pkgName,
+                    PackageManager.GET_SIGNING_CERTIFICATES
+                ).signingInfo
+                signingInfo?.apkContentsSigners ?: emptyArray()
+            } else {
+                @Suppress("DEPRECATION")
+                val packageInfo = packageManager.getPackageInfo(
+                    pkgName,
+                    PackageManager.GET_SIGNATURES
+                )
+                @Suppress("DEPRECATION")
+                packageInfo.signatures ?: emptyArray()
+            }
+
+            signatures.map { signature ->
+                val keyHashBytes = MessageDigest.getInstance("SHA-1").digest(signature.toByteArray())
+                Base64.encodeToString(keyHashBytes, Base64.NO_WRAP)
+            }
+        } catch (e: Exception) {
+            Log.w("MainActivity", "Failed to compute signer hashes", e)
+            emptyList()
+        }
+    }
+
+    /**
+     * 지도 인증 오류(onMapError) 진단 정보를 사람이 읽을 수 있는 텍스트로 조립한다.
+     */
+    private fun buildAuthDiagnosticText(error: Exception?): String {
+        val signers = computeAllSignerHashes().joinToString(", ")
+        val stackLines = error?.stackTrace
+            ?.take(3)
+            ?.joinToString("\n") { "\tat $it" }
+            ?: ""
+
+        return buildString {
+            append("pkg=$packageName\n")
+            append("keyHash=${computeKeyHash()}\n")
+            append("signers=$signers\n")
+            append("sdkInt=${Build.VERSION.SDK_INT}\n")
+            append("error=${error?.javaClass?.name}: ${error?.message}\n")
+            append("cause=${error?.cause?.message}")
+            if (stackLines.isNotEmpty()) {
+                append("\n")
+                append(stackLines)
+            }
+        }
+    }
+
+    /**
+     * 지도 인증 오류 진단 다이얼로그. 본문은 선택/복사 가능하며, "복사" 버튼으로 클립보드에 전체 복사한다.
+     */
+    private fun showAuthDiagnosticDialog(diagnosticText: String) {
+        val messageView = TextView(this@MainActivity).apply {
+            text = diagnosticText
+            setTextIsSelectable(true)
+            val paddingPx = (16 * resources.displayMetrics.density).toInt()
+            setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
+        }
+
+        AlertDialog.Builder(this@MainActivity)
+            .setTitle("지도 인증 오류")
+            .setView(messageView)
+            .setPositiveButton("복사") { _, _ ->
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                val clip = ClipData.newPlainText("지도 인증 오류", diagnosticText)
+                clipboard.setPrimaryClip(clip)
+                Toast.makeText(this@MainActivity, "복사됨", Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("닫기", null)
+            .show()
     }
 
     /**
