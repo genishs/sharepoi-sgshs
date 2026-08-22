@@ -14,8 +14,8 @@ android {
         applicationId = "com.sgshs.sharepoi"
         minSdk = 26
         targetSdk = 36
-        // 이번 내부테스트 빌드가 versionCode 3으로 올라가므로, 다음 업로드 때는 versionCode를 4로 올려야 한다
-        versionCode = 3
+        // 이번 내부테스트 빌드는 versionCode 4. 다음엔 5
+        versionCode = 4
         versionName = "0.1t"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
