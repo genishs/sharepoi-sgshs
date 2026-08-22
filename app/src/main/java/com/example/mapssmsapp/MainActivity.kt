@@ -19,6 +19,8 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import com.kakao.vectormap.KakaoMap
 import com.kakao.vectormap.KakaoMapReadyCallback
 import com.kakao.vectormap.KakaoMapSdk
@@ -45,9 +47,12 @@ class MainActivity : AppCompatActivity() {
 
     private lateinit var fusedLocationClient: FusedLocationProviderClient
 
-    // Default Fixed Location: Magoknaru Station (37.5667, 126.8273)
+    // Fallback location when GPS is unavailable: Magoknaru Station (37.5667, 126.8273)
     private val DEFAULT_LAT = 37.5667
     private val DEFAULT_LNG = 126.8273
+
+    // Last real device location obtained from FusedLocationProvider (null until first fix)
+    private var lastKnownLocation: Location? = null
 
     private lateinit var etPhoneNumber: EditText
     private lateinit var btnSendSms: Button
@@ -87,7 +92,7 @@ class MainActivity : AppCompatActivity() {
         }, object : KakaoMapReadyCallback() {
             override fun onMapReady(map: KakaoMap) {
                 kakaoMap = map
-                showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
+                moveToCurrentLocation()
 
                 // Label Click Listener for Restroom Markers
                 map.setOnLabelClickListener { _, _, label ->
@@ -132,7 +137,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnMyLocation.setOnClickListener {
-            showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
+            moveToCurrentLocation()
         }
 
         // Restroom Search Listener (4-in-1 multi-source search)
@@ -169,6 +174,43 @@ class MainActivity : AppCompatActivity() {
     override fun onPause() {
         super.onPause()
         mapView.pause()
+    }
+
+    /**
+     * Resolve the device's real location via FusedLocationProvider and center the map on it.
+     * Falls back to Magoknaru Station only when permission is missing or no fix is available.
+     */
+    private fun moveToCurrentLocation() {
+        val hasFine = ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        val hasCoarse = ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!hasFine && !hasCoarse) {
+            showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
+            return
+        }
+
+        val cts = CancellationTokenSource()
+        fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cts.token)
+            .addOnSuccessListener { location ->
+                if (location != null) {
+                    lastKnownLocation = location
+                    showLocationOnMap(location.latitude, location.longitude)
+                } else {
+                    // No fresh fix (e.g. GPS off) — try the cached one before falling back
+                    fusedLocationClient.lastLocation.addOnSuccessListener { cached ->
+                        if (cached != null) {
+                            lastKnownLocation = cached
+                            showLocationOnMap(cached.latitude, cached.longitude)
+                        } else {
+                            Toast.makeText(this, "현재 위치를 가져올 수 없어 기본 위치(마곡나루역)를 표시합니다.", Toast.LENGTH_SHORT).show()
+                            showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
+                        }
+                    }
+                }
+            }
+            .addOnFailureListener {
+                Toast.makeText(this, "위치 조회 실패: ${it.message}", Toast.LENGTH_SHORT).show()
+                showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
+            }
     }
 
     private fun showLocationOnMap(latitude: Double, longitude: Double) {
@@ -309,9 +351,10 @@ class MainActivity : AppCompatActivity() {
             return
         }
 
+        val known = lastKnownLocation
         val cameraPos = kakaoMap?.cameraPosition?.position
-        val lat = cameraPos?.latitude ?: DEFAULT_LAT
-        val lng = cameraPos?.longitude ?: DEFAULT_LNG
+        val lat = known?.latitude ?: cameraPos?.latitude ?: DEFAULT_LAT
+        val lng = known?.longitude ?: cameraPos?.longitude ?: DEFAULT_LNG
 
         val mapLink = "https://map.kakao.com/link/map/$lat,$lng"
         val message = "[내 위치 전송]\n현재 제 위치는 이곳입니다:\n$mapLink"
@@ -358,7 +401,7 @@ class MainActivity : AppCompatActivity() {
                 }
             }
             if (allGranted) {
-                showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
+                moveToCurrentLocation()
             } else {
                 Toast.makeText(this, "필요한 권한이 거부되어 일부 기능이 제한됩니다.", Toast.LENGTH_SHORT).show()
             }
