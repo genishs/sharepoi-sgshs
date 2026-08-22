@@ -31,8 +31,25 @@ android {
         buildConfigField("String", "KAKAO_REST_API_KEY", "\"${kakaoRestKey}\"")
     }
 
+    // Upload-key signing for Play App Signing. Secrets come from environment variables so
+    // nothing sensitive is committed: SHAREPOI_KEYSTORE, SHAREPOI_KEYSTORE_PW, SHAREPOI_KEY_ALIAS, SHAREPOI_KEY_PW
+    signingConfigs {
+        create("release") {
+            val ksPath = System.getenv("SHAREPOI_KEYSTORE")
+            if (ksPath != null) {
+                storeFile = file(ksPath)
+                storePassword = System.getenv("SHAREPOI_KEYSTORE_PW")
+                keyAlias = System.getenv("SHAREPOI_KEY_ALIAS") ?: "upload"
+                keyPassword = System.getenv("SHAREPOI_KEY_PW") ?: System.getenv("SHAREPOI_KEYSTORE_PW")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            if (System.getenv("SHAREPOI_KEYSTORE") != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
