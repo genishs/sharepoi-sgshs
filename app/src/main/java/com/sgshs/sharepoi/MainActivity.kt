@@ -1,4 +1,4 @@
-package com.example.mapssmsapp
+package com.sgshs.sharepoi
 
 import android.Manifest
 import android.content.Context
@@ -255,7 +255,7 @@ class MainActivity : AppCompatActivity() {
                     "https://dapi.kakao.com/v2/local/search/category.json?category_group_code=OL7&x=$lng&y=$lat&radius=2000&sort=distance"
                 )
 
-                val kaHeader = "sdk/2.14.1 os/android-34 origin/X8P0djq2A0FbvV77Y1eC1EpJDW8= android_pkg/com.example.mapssmsapp"
+                val kaHeader = "sdk/2.14.1 os/android-34 origin/X8P0djq2A0FbvV77Y1eC1EpJDW8= android_pkg/com.sgshs.sharepoi"
 
                 for (urlString in searchUrls) {
                     try {
