@@ -21,9 +21,9 @@ code{background:#f3f3f3;padding:0 .3em;border-radius:3px}
 <table>
 <tr><th>항목</th><th>용도</th><th>처리 방식</th></tr>
 <tr><td>현재 위치(GPS 등 정밀 위치)</td><td>지도에 내 위치 표시, 주변 공중화장실 검색, 로드뷰 연결, 위치 공유 문자 작성</td><td>기기 내에서만 처리. 개발자 서버로 전송·저장하지 않음</td></tr>
-<tr><td>문자 수신자 전화번호</td><td>이용자가 입력한 번호로 내 위치 링크를 SMS 발송</td><td>기기 내 SMS 기능에만 전달. 저장·전송하지 않음</td></tr>
+<tr><td>문자 수신자 전화번호</td><td>이용자가 입력한 번호로 내 위치 링크를 보낼 문자 앱을 여는 데 사용</td><td>기기의 문자 앱에만 전달. 앱이 직접 발송하지 않으며 저장·전송하지 않음</td></tr>
 </table>
-<p>앱은 회원가입·로그인이 없으며, 이름·이메일·기기 식별자 등을 수집하지 않습니다. 광고 SDK나 분석(애널리틱스) 도구를 포함하지 않습니다.</p>
+<p>앱은 회원가입·로그인이 없으며, 이름·이메일·기기 식별자 등을 수집하지 않습니다. 광고 SDK나 분석(애널리틱스) 도구를 포함하지 않습니다. 앱은 문자 메시지를 직접 발송하지 않으며(<code>SEND_SMS</code> 권한 없음), "위치 전송" 버튼은 기기에 설치된 문자 앱을 열어줄 뿐 발송 여부는 이용자가 문자 앱에서 직접 결정합니다.</p>
 
 <h2>2. 제3자 서비스</h2>
 <p>지도 표시와 장소 검색을 위해 <strong>카카오맵 SDK 및 카카오 로컬 API</strong>(주식회사 카카오)를 사용합니다. 지도 타일 요청과 주변 검색 시 현재 지도 중심 좌표가 카카오 서버로 전송됩니다. 카카오의 처리 방침은 <a href="https://www.kakao.com/policy/privacy" target="_blank" rel="noopener">카카오 개인정보처리방침</a>을 참고하세요.</p>
@@ -32,7 +32,6 @@ code{background:#f3f3f3;padding:0 .3em;border-radius:3px}
 <h2>3. 앱 권한</h2>
 <ul>
 <li><code>ACCESS_FINE_LOCATION</code> / <code>ACCESS_COARSE_LOCATION</code> — 현재 위치 확인</li>
-<li><code>SEND_SMS</code> — 이용자가 "위치 전송" 버튼을 누를 때만 입력한 번호로 문자 발송</li>
 <li><code>INTERNET</code> — 지도 타일·장소 검색 통신</li>
 </ul>
 <p>권한은 기기 설정에서 언제든 철회할 수 있으며, 철회 시 해당 기능만 제한됩니다.</p>

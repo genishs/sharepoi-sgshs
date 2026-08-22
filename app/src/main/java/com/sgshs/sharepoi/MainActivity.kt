@@ -1,6 +1,7 @@
 package com.sgshs.sharepoi
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -12,7 +13,6 @@ import android.location.Location
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.telephony.SmsManager
 import android.util.Base64
 import android.util.Log
 import android.widget.Button
@@ -494,11 +494,6 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun sendLocationSms(phoneNumber: String) {
-        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.SEND_SMS) != PackageManager.PERMISSION_GRANTED) {
-            Toast.makeText(this, "SMS 전송 권한이 필요합니다.", Toast.LENGTH_SHORT).show()
-            return
-        }
-
         val known = lastKnownLocation
         val cameraPos = kakaoMap?.cameraPosition?.position
         val lat = known?.latitude ?: cameraPos?.latitude ?: DEFAULT_LAT
@@ -508,19 +503,20 @@ class MainActivity : AppCompatActivity() {
         val message = "[내 위치 전송]\n현재 제 위치는 이곳입니다:\n$mapLink"
 
         try {
-            val smsManager: SmsManager = this.getSystemService(SmsManager::class.java)
-            smsManager.sendTextMessage(phoneNumber, null, message, null, null)
-            Toast.makeText(this, "SMS 전송 성공!", Toast.LENGTH_SHORT).show()
-        } catch (e: Exception) {
-            Toast.makeText(this, "SMS 전송 실패: ${e.message}", Toast.LENGTH_LONG).show()
+            val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + Uri.encode(phoneNumber))).apply {
+                putExtra("sms_body", message)
+            }
+            startActivity(intent)
+            Toast.makeText(this, "문자 앱으로 이동합니다.", Toast.LENGTH_SHORT).show()
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "문자 앱을 찾을 수 없습니다.", Toast.LENGTH_SHORT).show()
         }
     }
 
     private fun checkAndRequestPermissions() {
         val permissions = arrayOf(
             Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION,
-            Manifest.permission.SEND_SMS
+            Manifest.permission.ACCESS_COARSE_LOCATION
         )
 
         val listPermissionsNeeded = ArrayList<String>()
