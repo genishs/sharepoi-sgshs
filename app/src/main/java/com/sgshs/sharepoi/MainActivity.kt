@@ -73,7 +73,10 @@ class MainActivity : AppCompatActivity() {
         
         // Initialize Kakao SDK before setContentView
         KakaoMapSdk.init(this, BuildConfig.KAKAO_MAP_API_KEY)
-        
+
+        val signingKeyHash = computeKeyHash()
+        Log.i("MainActivity", "signing key hash=$signingKeyHash pkg=$packageName")
+
         setContentView(R.layout.activity_main)
 
         etPhoneNumber = findViewById(R.id.etPhoneNumber)
@@ -91,7 +94,12 @@ class MainActivity : AppCompatActivity() {
             override fun onMapDestroy() {}
 
             override fun onMapError(error: Exception?) {
-                Toast.makeText(this@MainActivity, "지도를 로드하는 중 오류가 발생했습니다.", Toast.LENGTH_SHORT).show()
+                Log.e("MainActivity", "Kakao map error", error)
+                Toast.makeText(
+                    this@MainActivity,
+                    "지도를 로드하는 중 오류: ${error?.javaClass?.simpleName}: ${error?.message}",
+                    Toast.LENGTH_LONG
+                ).show()
             }
         }, object : KakaoMapReadyCallback() {
             override fun onMapReady(map: KakaoMap) {
@@ -241,16 +249,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 설치된 앱의 실제 서명 인증서로부터 SHA-1 키 해시를 계산해 Kakao KA 헤더를 조립한다.
+     * 설치된 앱의 실제 서명 인증서로부터 SHA-1 키 해시(Base64, NO_WRAP)를 계산한다.
      * Play 앱 서명(App Signing)으로 재서명되면 디버그 빌드의 키 해시와 실제 배포 키 해시가
      * 달라지므로, 하드코딩된 값 대신 런타임에 직접 계산해서 사용한다.
      */
-    private fun buildKaHeader(): String {
-        val sdkVersion = "2.14.1"
-        val osVersion = "android-${Build.VERSION.SDK_INT}"
+    private fun computeKeyHash(): String {
         val pkgName = packageName
 
-        val origin = try {
+        return try {
             val signature = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 val signingInfo = packageManager.getPackageInfo(
                     pkgName,
@@ -282,6 +288,16 @@ class MainActivity : AppCompatActivity() {
             Log.w("MainActivity", "Failed to compute signing key hash for KA header", e)
             ""
         }
+    }
+
+    /**
+     * computeKeyHash()로 얻은 서명 키 해시를 이용해 Kakao KA 헤더를 조립한다.
+     */
+    private fun buildKaHeader(): String {
+        val sdkVersion = "2.14.1"
+        val osVersion = "android-${Build.VERSION.SDK_INT}"
+        val pkgName = packageName
+        val origin = computeKeyHash()
 
         return "sdk/$sdkVersion os/$osVersion origin/$origin android_pkg/$pkgName"
     }
