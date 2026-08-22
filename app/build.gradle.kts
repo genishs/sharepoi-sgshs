@@ -8,14 +8,14 @@ plugins {
 
 android {
     namespace = "com.sgshs.sharepoi"
-    compileSdk = 34
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.sgshs.sharepoi"
         minSdk = 26
-        targetSdk = 34
-        // 이번 내부테스트 빌드가 versionCode 1로 올라가므로, 다음 업로드 때는 versionCode를 2로 올려야 한다
-        versionCode = 1
+        targetSdk = 36
+        // 이번 내부테스트 빌드가 versionCode 2로 올라가므로, 다음 업로드 때는 versionCode를 3으로 올려야 한다
+        versionCode = 2
         versionName = "0.1t"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
