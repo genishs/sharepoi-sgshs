@@ -7,11 +7,11 @@ plugins {
 }
 
 android {
-    namespace = "com.example.mapssmsapp"
+    namespace = "com.sgshs.sharepoi"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.example.mapssmsapp"
+        applicationId = "com.sgshs.sharepoi"
         minSdk = 26
         targetSdk = 34
         versionCode = 1
