@@ -112,7 +112,14 @@ class MainActivity : AppCompatActivity() {
                     if (item != null) {
                         val name = item.optString("place_name", "화장실")
                         val roadAddress = item.optString("road_address_name", "")
-                        val address = if (roadAddress.isNotEmpty()) roadAddress else item.optString("address_name", "주소 정보 없음")
+                        val jibunAddress = item.optString("address_name", "")
+                        // 도로명주소 첫 줄 + 지번주소 둘째 줄("(지번) ..."). 한쪽이 비면 그 줄은 숨긴다.
+                        val address = when {
+                            roadAddress.isNotEmpty() && jibunAddress.isNotEmpty() -> "$roadAddress\n(지번) $jibunAddress"
+                            roadAddress.isNotEmpty() -> roadAddress
+                            jibunAddress.isNotEmpty() -> jibunAddress
+                            else -> "주소 정보 없음"
+                        }
                         val phone = item.optString("phone", "전화번호 정보 없음")
                         val phoneDisplay = if (phone.isEmpty()) "전화번호 정보 없음" else phone
                         val lat = item.optString("y", "37.5667").toDouble()
