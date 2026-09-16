@@ -65,11 +65,24 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnSendSms: Button
     private lateinit var btnRoadview: Button
     private lateinit var btnRestroom: Button
+    private lateinit var btnPlaces: Button
     private lateinit var btnZoomIn: Button
     private lateinit var btnZoomOut: Button
     private lateinit var btnMyLocation: Button
 
     private val PERMISSION_REQUEST_CODE = 1000
+
+    // 주변 편의시설 카테고리 (카카오 category_group_code): (라벨, 코드, 이모지)
+    private val placeCategories = listOf(
+        Triple("편의점", "CS2", "🏪"),
+        Triple("카페", "CE7", "☕"),
+        Triple("음식점", "FD6", "🍚"),
+        Triple("주차장", "PK6", "🅿️"),
+        Triple("약국", "PM9", "💊"),
+        Triple("은행", "BK9", "🏦"),
+        Triple("지하철역", "SW8", "🚇"),
+        Triple("병원", "HP8", "🏥")
+    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -86,6 +99,7 @@ class MainActivity : AppCompatActivity() {
         btnSendSms = findViewById(R.id.btnSendSms)
         btnRoadview = findViewById(R.id.btnRoadview)
         btnRestroom = findViewById(R.id.btnRestroom)
+        btnPlaces = findViewById(R.id.btnPlaces)
         btnZoomIn = findViewById(R.id.btnZoomIn)
         btnZoomOut = findViewById(R.id.btnZoomOut)
         btnMyLocation = findViewById(R.id.btnMyLocation)
@@ -110,16 +124,17 @@ class MainActivity : AppCompatActivity() {
                 map.setOnLabelClickListener { _, _, label ->
                     val item = label.tag as? JSONObject
                     if (item != null) {
-                        val name = item.optString("place_name", "화장실")
+                        val icon = item.optString("display_icon", "📍")
+                        val name = item.optString("place_name", "장소")
                         val roadAddress = item.optString("road_address_name", "")
                         val address = if (roadAddress.isNotEmpty()) roadAddress else item.optString("address_name", "주소 정보 없음")
-                        val phone = item.optString("phone", "전화번호 정보 없음")
+                        val phone = item.optString("phone", "")
                         val phoneDisplay = if (phone.isEmpty()) "전화번호 정보 없음" else phone
                         val lat = item.optString("y", "37.5667").toDouble()
                         val lng = item.optString("x", "126.8273").toDouble()
 
                         AlertDialog.Builder(this@MainActivity)
-                            .setTitle("🚽 $name")
+                            .setTitle("$icon $name")
                             .setMessage("📍 주소: $address\n📞 전화: $phoneDisplay")
                             .setPositiveButton("📷 로드뷰 보기") { _, _ ->
                                 val roadviewUrl = "https://map.kakao.com/link/roadview/$lat,$lng"
@@ -155,6 +170,11 @@ class MainActivity : AppCompatActivity() {
         // Restroom Search Listener (4-in-1 multi-source search)
         btnRestroom.setOnClickListener {
             fetchNearbyRestroomsMultiSource()
+        }
+
+        // Nearby places (편의시설) search: pick a category, then search
+        btnPlaces.setOnClickListener {
+            showPlaceCategoryDialog()
         }
 
         // Roadview Listener with Magoknaru fallback
@@ -426,6 +446,7 @@ class MainActivity : AppCompatActivity() {
 
                                 if (!seenIds.contains(key)) {
                                     seenIds.add(key)
+                                    item.put("display_icon", "🚽")
                                     allDocuments.put(item)
                                 }
                             }
@@ -436,7 +457,7 @@ class MainActivity : AppCompatActivity() {
                 }
 
                 runOnUiThread {
-                    displayRestroomMarkers(allDocuments)
+                    displayMarkers(allDocuments, R.drawable.restroom_marker, "restroomLayer", "화장실")
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
@@ -447,40 +468,121 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    private fun displayRestroomMarkers(documents: JSONArray) {
+    private fun displayMarkers(documents: JSONArray, markerDrawableId: Int, layerId: String, categoryLabel: String) {
         val map = kakaoMap ?: return
         val count = documents.length()
         if (count == 0) {
-            Toast.makeText(this, "주변 2km 이내에 검색된 화장실이 없습니다.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "주변 2km 이내에 검색된 ${categoryLabel} 정보가 없습니다.", Toast.LENGTH_SHORT).show()
             return
         }
 
         val labelManager = map.labelManager ?: return
-        
-        val layer = labelManager.getLayer("restroomLayer")
-            ?: labelManager.addLayer(LabelLayerOptions.from("restroomLayer").setZOrder(10000))
 
-        val bitmap = getBitmapFromVector(this, R.drawable.restroom_marker)
+        val layer = labelManager.getLayer(layerId)
+            ?: labelManager.addLayer(LabelLayerOptions.from(layerId).setZOrder(10000))
+
+        val bitmap = getBitmapFromVector(this, markerDrawableId)
         val styles = labelManager.addLabelStyles(
             LabelStyles.from(LabelStyle.from(bitmap).setAnchorPoint(0.5f, 0.5f))
         )
 
         for (i in 0 until count) {
             val item = documents.getJSONObject(i)
-            val id = item.optString("id", "restroom_$i")
+            val id = item.optString("id", "${layerId}_$i")
             val itemLat = item.getString("y").toDouble()
             val itemLng = item.getString("x").toDouble()
 
             val position = LatLng.from(itemLat, itemLng)
             // Attach item JSONObject as Tag
-            val options = LabelOptions.from("restroom_label_$id", position)
+            val options = LabelOptions.from("${layerId}_label_$id", position)
                 .setStyles(styles)
                 .setTag(item)
 
             layer?.addLabel(options)
         }
 
-        Toast.makeText(this, "검색 완료! 총 ${count}개의 화장실(초록색 핀)을 표시했습니다. 핀을 터치해 상세 정보를 확인하세요!", Toast.LENGTH_LONG).show()
+        Toast.makeText(this, "검색 완료! 총 ${count}개의 ${categoryLabel}을(를) 표시했습니다. 핀을 터치해 상세 정보를 확인하세요!", Toast.LENGTH_LONG).show()
+    }
+
+    /**
+     * 주변 편의시설 카테고리 선택 다이얼로그. 선택하면 해당 카테고리를 검색한다.
+     */
+    private fun showPlaceCategoryDialog() {
+        val labels = placeCategories.map { "${it.third} ${it.first}" }.toTypedArray()
+        AlertDialog.Builder(this)
+            .setTitle("주변에서 찾을 편의시설을 선택하세요")
+            .setItems(labels) { _, which ->
+                val (label, code, icon) = placeCategories[which]
+                fetchNearbyByCategory(code, icon, label)
+            }
+            .setNegativeButton("취소", null)
+            .show()
+    }
+
+    /**
+     * 지도 중심 주변 2km 내에서 지정한 카카오 카테고리를 검색해 파란 핀으로 표시한다.
+     * category.json 은 페이지당 최대 15개라 최대 3페이지(45개)까지 누적한다.
+     */
+    private fun fetchNearbyByCategory(categoryCode: String, icon: String, categoryLabel: String) {
+        val cameraPos = kakaoMap?.cameraPosition?.position
+        val lat = cameraPos?.latitude ?: DEFAULT_LAT
+        val lng = cameraPos?.longitude ?: DEFAULT_LNG
+
+        Toast.makeText(this, "지도 중심 주변 ${categoryLabel} 검색 중...", Toast.LENGTH_SHORT).show()
+
+        Thread {
+            try {
+                val allDocuments = JSONArray()
+                val seenIds = HashSet<String>()
+                val kaHeader = buildKaHeader()
+
+                for (page in 1..3) {
+                    val urlString = "https://dapi.kakao.com/v2/local/search/category.json?category_group_code=$categoryCode&x=$lng&y=$lat&radius=2000&sort=distance&page=$page&size=15"
+                    try {
+                        val url = URL(urlString)
+                        val conn = url.openConnection() as HttpURLConnection
+                        conn.requestMethod = "GET"
+                        conn.setRequestProperty("Authorization", "KakaoAK ${BuildConfig.KAKAO_REST_API_KEY}")
+                        conn.setRequestProperty("KA", kaHeader)
+
+                        if (conn.responseCode == 200) {
+                            val responseText = conn.inputStream.bufferedReader().use { it.readText() }
+                            val jsonObject = JSONObject(responseText)
+                            val docs = jsonObject.getJSONArray("documents")
+
+                            for (i in 0 until docs.length()) {
+                                val item = docs.getJSONObject(i)
+                                val id = item.optString("id", "")
+                                val name = item.optString("place_name", "")
+                                val key = if (id.isNotEmpty()) id else name
+
+                                if (!seenIds.contains(key)) {
+                                    seenIds.add(key)
+                                    item.put("display_icon", icon)
+                                    allDocuments.put(item)
+                                }
+                            }
+
+                            val meta = jsonObject.optJSONObject("meta")
+                            if (meta == null || meta.optBoolean("is_end", true)) break
+                        } else {
+                            break
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                }
+
+                runOnUiThread {
+                    displayMarkers(allDocuments, R.drawable.place_marker, "placeLayer", categoryLabel)
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+                runOnUiThread {
+                    Toast.makeText(this, "네트워크 오류: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }.start()
     }
 
     private fun getBitmapFromVector(context: Context, drawableId: Int): Bitmap {

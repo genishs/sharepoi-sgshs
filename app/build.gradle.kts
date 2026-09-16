@@ -14,9 +14,9 @@ android {
         applicationId = "com.sgshs.sharepoi"
         minSdk = 26
         targetSdk = 36
-        // 이번 내부테스트 빌드는 versionCode 5. 다음엔 6
-        versionCode = 5
-        versionName = "0.1t"
+        // 프로덕션 첫 정식 출시(테스터 의견 반영: 전화번호 표시·주변 편의시설). versionCode 6
+        versionCode = 6
+        versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
