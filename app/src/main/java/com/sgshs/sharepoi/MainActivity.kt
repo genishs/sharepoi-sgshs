@@ -23,6 +23,8 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -94,6 +96,21 @@ class MainActivity : AppCompatActivity() {
         Log.i("MainActivity", "signing key hash=$signingKeyHash pkg=$packageName")
 
         setContentView(R.layout.activity_main)
+
+        // targetSdk 36: Android 15+ 에서 edge-to-edge 강제. 상단(상태바)은 AppCompat 액션바가 처리하므로
+        // 하단 컨트롤 영역에만 좌/우/하단(내비게이션 바·컷아웃·키보드) 인셋을 패딩으로 더한다.
+        // enableEdgeToEdge() 는 지원 중단 API(setStatusBarColor 등)를 끌어들여 쓰지 않는다.
+        val bottomArea = findViewById<android.view.View>(R.id.bottomArea)
+        val baseL = bottomArea.paddingLeft
+        val baseT = bottomArea.paddingTop
+        val baseR = bottomArea.paddingRight
+        val baseB = bottomArea.paddingBottom
+        ViewCompat.setOnApplyWindowInsetsListener(findViewById<android.view.View>(android.R.id.content)) { _, insets ->
+            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+            bottomArea.setPadding(baseL + bars.left, baseT, baseR + bars.right, baseB + maxOf(bars.bottom, ime.bottom))
+            insets
+        }
 
         etPhoneNumber = findViewById(R.id.etPhoneNumber)
         btnSendSms = findViewById(R.id.btnSendSms)
