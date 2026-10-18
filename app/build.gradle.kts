@@ -14,9 +14,9 @@ android {
         applicationId = "com.sgshs.sharepoi"
         minSdk = 26
         targetSdk = 36
-        // 프로덕션 첫 정식 출시(테스터 의견 반영: 전화번호 표시·주변 편의시설). versionCode 6
-        versionCode = 6
-        versionName = "1.0"
+        // 1.0.1: 앱 크기 축소(R8)·안 쓰는 Material 제거·하단 인셋/키보드 처리. versionCode 7
+        versionCode = 7
+        versionName = "1.0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
