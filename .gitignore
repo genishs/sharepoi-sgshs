@@ -19,3 +19,9 @@ captures/
 
 # Log files
 *.log
+
+# Signing keys and secrets (never commit)
+*.jks
+*.keystore
+*.pass
+secrets.properties
