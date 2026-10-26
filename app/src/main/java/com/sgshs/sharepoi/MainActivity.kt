@@ -681,7 +681,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun startShareChooser(intro: String, lat: Double, lng: Double) {
-        val mapLink = "https://map.kakao.com/link/map/$lat,$lng"
+        val mapLink = "https://map.kakao.com/link/map/" + String.format(java.util.Locale.US, "%.6f,%.6f", lat, lng)
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
             putExtra(Intent.EXTRA_TEXT, "$intro\n$mapLink")
