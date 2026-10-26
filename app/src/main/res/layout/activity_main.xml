@@ -57,7 +57,7 @@
             android:textColor="#000000" />
     </LinearLayout>
 
-    <!-- 하단 입력 및 전송/로드뷰/화장실 영역 -->
+    <!-- 하단 공유/로드뷰/화장실 영역 -->
     <LinearLayout
         android:id="@+id/bottomArea"
         android:layout_width="match_parent"
@@ -107,28 +107,11 @@
                 android:layout_marginStart="4dp" />
         </LinearLayout>
 
-        <LinearLayout
+        <Button
+            android:id="@+id/btnShare"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="horizontal">
-
-            <EditText
-                android:id="@+id/etPhoneNumber"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:hint="전송할 전화번호 입력"
-                android:inputType="phone"
-                android:textColor="#000000"
-                android:textColorHint="#888888" />
-
-            <Button
-                android:id="@+id/btnSendSms"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:text="위치 전송" />
-        </LinearLayout>
+            android:text="📤 위치 공유" />
 
     </LinearLayout>
 
