@@ -13,10 +13,12 @@ import android.location.Location
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
 import android.widget.Button
-import android.widget.EditText
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
@@ -63,8 +65,7 @@ class MainActivity : AppCompatActivity() {
     // Last real device location obtained from FusedLocationProvider (null until first fix)
     private var lastKnownLocation: Location? = null
 
-    private lateinit var etPhoneNumber: EditText
-    private lateinit var btnSendSms: Button
+    private lateinit var btnShare: Button
     private lateinit var btnRoadview: Button
     private lateinit var btnRestroom: Button
     private lateinit var btnPlaces: Button
@@ -73,6 +74,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnMyLocation: Button
 
     private val PERMISSION_REQUEST_CODE = 1000
+    private val SHARE_FIX_TIMEOUT_MS = 6000L
+    private val CACHE_MAX_AGE_MS = 120_000L
 
     // 주변 편의시설 카테고리 (카카오 category_group_code): (라벨, 코드, 이모지)
     private val placeCategories = listOf(
@@ -112,8 +115,7 @@ class MainActivity : AppCompatActivity() {
             insets
         }
 
-        etPhoneNumber = findViewById(R.id.etPhoneNumber)
-        btnSendSms = findViewById(R.id.btnSendSms)
+        btnShare = findViewById(R.id.btnShare)
         btnRoadview = findViewById(R.id.btnRoadview)
         btnRestroom = findViewById(R.id.btnRestroom)
         btnPlaces = findViewById(R.id.btnPlaces)
@@ -205,13 +207,8 @@ class MainActivity : AppCompatActivity() {
             startActivity(intent)
         }
 
-        btnSendSms.setOnClickListener {
-            val phone = etPhoneNumber.text.toString().trim()
-            if (phone.isEmpty()) {
-                Toast.makeText(this, "전화번호를 입력해 주세요.", Toast.LENGTH_SHORT).show()
-                return@setOnClickListener
-            }
-            sendLocationSms(phone)
+        btnShare.setOnClickListener {
+            shareLocation()
         }
     }
 
@@ -612,23 +609,87 @@ class MainActivity : AppCompatActivity() {
         return bitmap
     }
 
-    private fun sendLocationSms(phoneNumber: String) {
-        val known = lastKnownLocation
-        val cameraPos = kakaoMap?.cameraPosition?.position
-        val lat = known?.latitude ?: cameraPos?.latitude ?: DEFAULT_LAT
-        val lng = known?.longitude ?: cameraPos?.longitude ?: DEFAULT_LNG
+    private var sharing = false
 
-        val mapLink = "https://map.kakao.com/link/map/$lat,$lng"
-        val message = "[내 위치 전송]\n현재 제 위치는 이곳입니다:\n$mapLink"
+    /**
+     * 위치 공유: 공유 시점에 위치를 다시 요청한다(최대 SHARE_FIX_TIMEOUT_MS).
+     * 새 위치를 얻지 못하면 지도 중심이나 기본 좌표를 "현재 위치"로 보내지 않고,
+     * 안내 대화상자에서 "지도에서 고른 위치"로 보낼지 묻는다.
+     */
+    private fun shareLocation() {
+        if (sharing) return
+        val hasPermission =
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
+            ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+        if (!hasPermission) {
+            showNoFixDialog("위치 권한이 없어 현재 위치를 확인할 수 없습니다.")
+            return
+        }
 
-        try {
-            val intent = Intent(Intent.ACTION_SENDTO, Uri.parse("smsto:" + Uri.encode(phoneNumber))).apply {
-                putExtra("sms_body", message)
+        sharing = true
+        btnShare.isEnabled = false
+        Toast.makeText(this, "현재 위치를 확인하는 중입니다…", Toast.LENGTH_SHORT).show()
+
+        val cts = CancellationTokenSource()
+        val handler = Handler(Looper.getMainLooper())
+        var finished = false
+        val finish: (Location?) -> Unit = finish@{ location ->
+            if (finished) return@finish
+            finished = true
+            handler.removeCallbacksAndMessages(null)
+            sharing = false
+            btnShare.isEnabled = true
+            if (isFinishing || isDestroyed) return@finish
+            if (location != null) {
+                lastKnownLocation = location
+                startShareChooser("현재 제 위치입니다:", location.latitude, location.longitude)
+            } else {
+                showNoFixDialog("현재 위치를 확인하지 못했습니다. 위치(GPS)가 켜져 있는지 확인해 주세요.")
             }
-            startActivity(intent)
-            Toast.makeText(this, "문자 앱으로 이동합니다.", Toast.LENGTH_SHORT).show()
+        }
+        handler.postDelayed({ cts.cancel(); finish(freshCachedLocation()) }, SHARE_FIX_TIMEOUT_MS)
+        try {
+            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cts.token)
+                .addOnSuccessListener { location -> finish(location ?: freshCachedLocation()) }
+                .addOnFailureListener { finish(freshCachedLocation()) }
+        } catch (e: SecurityException) {
+            finish(null)
+        }
+    }
+
+    /** 최근(CACHE_MAX_AGE_MS 이내)에 얻은 실제 위치만 인정한다. 오래된 캐시는 쓰지 않는다. */
+    private fun freshCachedLocation(): Location? {
+        val known = lastKnownLocation ?: return null
+        val ageMs = (SystemClock.elapsedRealtimeNanos() - known.elapsedRealtimeNanos) / 1_000_000
+        return if (ageMs in 0..CACHE_MAX_AGE_MS) known else null
+    }
+
+    private fun showNoFixDialog(reason: String) {
+        val center = kakaoMap?.cameraPosition?.position
+        val builder = AlertDialog.Builder(this)
+            .setTitle("현재 위치를 보낼 수 없습니다")
+            .setNegativeButton("취소", null)
+        if (center == null) {
+            builder.setMessage(reason).show()
+            return
+        }
+        builder.setMessage("$reason\n\n대신 지도에서 고른 위치(화면 중앙)를 보낼 수 있습니다. 이 경우 \"현재 위치\"가 아니라 \"지도에서 고른 위치\"로 표시됩니다.")
+            .setPositiveButton("지도에서 고른 위치 공유") { _, _ ->
+                startShareChooser("지도에서 고른 위치입니다:", center.latitude, center.longitude)
+            }
+            .show()
+    }
+
+    private fun startShareChooser(intro: String, lat: Double, lng: Double) {
+        val mapLink = "https://map.kakao.com/link/map/$lat,$lng"
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, "$intro\n$mapLink")
+        }
+        try {
+            startActivity(Intent.createChooser(send, "위치 공유"))
         } catch (e: ActivityNotFoundException) {
-            Toast.makeText(this, "문자 앱을 찾을 수 없습니다.", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "위치를 공유할 수 있는 앱이 없습니다.", Toast.LENGTH_SHORT).show()
         }
     }
 
