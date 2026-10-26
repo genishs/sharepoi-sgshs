@@ -14,9 +14,9 @@ android {
         applicationId = "com.sgshs.sharepoi"
         minSdk = 26
         targetSdk = 36
-        // 1.0.1: 앱 크기 축소(R8)·안 쓰는 Material 제거·하단 인셋/키보드 처리. versionCode 7
-        versionCode = 7
-        versionName = "1.0.1"
+        // 1.0.2: 위치 공유를 공유 시트로(전화번호 입력란 제거)·현재 위치 미확보 시 잘못된 좌표 전송 방지. versionCode 8
+        versionCode = 8
+        versionName = "1.0.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
