@@ -181,16 +181,19 @@ class MainActivity : AppCompatActivity() {
                     if (item != null) {
                         val icon = item.optString("display_icon", "📍")
                         val name = item.optString("place_name", "장소")
-                        val roadAddress = item.optString("road_address_name", "")
-                        val address = if (roadAddress.isNotEmpty()) roadAddress else item.optString("address_name", "주소 정보 없음")
-                        val phone = item.optString("phone", "")
-                        val phoneDisplay = if (phone.isEmpty()) "전화번호 정보 없음" else phone
+                        // 화장실 4소스·편의시설 8개 카테고리 결과가 모두 이 한 경로로 상세를 띄운다(#8).
+                        // 도로명 주소(road_address_name) 첫 줄 + 지번 주소(address_name) 둘째 줄, 빈 쪽은 숨김.
+                        val detail = PlaceText.placeDetail(
+                            item.optString("road_address_name", ""),
+                            item.optString("address_name", ""),
+                            item.optString("phone", "")
+                        )
                         val lat = item.optString("y", "37.5667").toDouble()
                         val lng = item.optString("x", "126.8273").toDouble()
 
                         AlertDialog.Builder(this@MainActivity)
                             .setTitle("$icon $name")
-                            .setMessage("📍 주소: $address\n📞 전화: $phoneDisplay")
+                            .setMessage(detail)
                             .setPositiveButton("📷 로드뷰 보기") { _, _ ->
                                 val roadviewUrl = "https://map.kakao.com/link/roadview/$lat,$lng"
                                 val intent = Intent(Intent.ACTION_VIEW, Uri.parse(roadviewUrl))
