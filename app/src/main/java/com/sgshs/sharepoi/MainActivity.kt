@@ -10,9 +10,11 @@ import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.location.Location
+import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import android.widget.Button
@@ -22,6 +24,7 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.location.LocationManagerCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModelProvider
@@ -70,6 +73,9 @@ class MainActivity : AppCompatActivity() {
 
     /** 지도 오류 안내가 겹쳐 뜨지 않게 잡아 둔다. */
     private var mapErrorDialog: AlertDialog? = null
+
+    /** 권한·위치 설정 화면을 열었으면 돌아왔을 때 현재 위치를 다시 찾는다(#30). */
+    private var locateOnResume = false
 
     private lateinit var btnShare: Button
     private lateinit var btnRoadview: Button
@@ -228,7 +234,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         btnMyLocation.setOnClickListener {
-            moveToCurrentLocation()
+            moveToCurrentLocation(LocateTrigger.USER)
         }
 
         // Restroom Search Listener (4-in-1 multi-source search)
@@ -260,6 +266,11 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         mapView.resume()
+        // 권한·위치 설정 화면에서 돌아왔으면 한 번 다시 현재 위치를 찾아 본다(#30).
+        if (locateOnResume) {
+            locateOnResume = false
+            if (kakaoMap != null && (hasFineLocation() || hasCoarseLocation())) moveToCurrentLocation(LocateTrigger.RETURNED_FROM_SETTINGS)
+        }
     }
 
     override fun onPause() {
@@ -268,40 +279,116 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Resolve the device's real location via FusedLocationProvider and center the map on it.
-     * Falls back to Magoknaru Station only when permission is missing or no fix is available.
+     * 실제 기기 위치(FusedLocationProvider)로 지도를 옮기고 현재 위치 마커를 찍는다.
+     * 위치를 얻지 못하면(권한 없음·위치 꺼짐·조회 실패) 마커를 찍지 않는다(#30) — 기본 좌표는 현재 위치가 아니다.
+     * 못 얻었을 때의 동작은 [trigger] 에 따른다:
+     * - [LocateTrigger.USER](🎯 버튼): 권한 또는 위치 설정 안내 대화상자만 띄우고 지도는 그대로 둔다.
+     * - [LocateTrigger.START](지도 준비·권한 응답): 처음 보이는 지역만 기본 좌표(마곡나루역 부근)로 두고 짧게 알린다.
+     * - [LocateTrigger.RETURNED_FROM_SETTINGS]: 아무것도 하지 않는다(안내를 되풀이하지 않는다).
+     * 콜백은 화면에 묶어(onStop 때 해제) 회전으로 사라진 화면·지도에 닿지 않게 한다.
      */
-    private fun moveToCurrentLocation() {
+    private fun moveToCurrentLocation(trigger: LocateTrigger = LocateTrigger.START) {
         val hasFine = hasFineLocation()
         if (!hasFine && !hasCoarseLocation()) {
-            showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
+            when (trigger) {
+                LocateTrigger.USER -> showLocationPermissionGuide()
+                LocateTrigger.START -> showDefaultArea()
+                LocateTrigger.RETURNED_FROM_SETTINGS -> Unit
+            }
             return
+        }
+
+        val onNoFix = {
+            when (trigger) {
+                LocateTrigger.USER -> showLocationUnavailableGuide()
+                LocateTrigger.START -> {
+                    Toast.makeText(this, "현재 위치를 확인하지 못해 기본 지역(마곡나루역 부근)을 보여 줍니다.", Toast.LENGTH_SHORT).show()
+                    showDefaultArea()
+                }
+                LocateTrigger.RETURNED_FROM_SETTINGS -> Unit
+            }
         }
 
         // 대략적 위치만 허용됐어도 그 위치로 옮긴다(#11). 정확도 요청은 권한에 맞춘다.
         val cts = CancellationTokenSource()
-        fusedLocationClient.getCurrentLocation(locationPriority(hasFine), cts.token)
-            .addOnSuccessListener { location ->
-                if (location != null) {
-                    rememberFix(location, hasFine)
-                    showLocationOnMap(location.latitude, location.longitude)
-                } else {
-                    // No fresh fix (e.g. GPS off) — try the cached one before falling back
-                    fusedLocationClient.lastLocation.addOnSuccessListener { cached ->
-                        if (cached != null) {
-                            rememberFix(cached, hasFine)
-                            showLocationOnMap(cached.latitude, cached.longitude)
-                        } else {
-                            Toast.makeText(this, "현재 위치를 가져올 수 없어 기본 위치(마곡나루역)를 표시합니다.", Toast.LENGTH_SHORT).show()
-                            showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
-                        }
+        try {
+            fusedLocationClient.getCurrentLocation(locationPriority(hasFine), cts.token)
+                .addOnSuccessListener(this) { location ->
+                    if (location != null) {
+                        rememberFix(location, hasFine)
+                        showLocationOnMap(location.latitude, location.longitude)
+                    } else {
+                        // No fresh fix (e.g. GPS off) — try the cached one before giving up
+                        fusedLocationClient.lastLocation
+                            .addOnSuccessListener(this) { cached ->
+                                if (cached != null) {
+                                    rememberFix(cached, hasFine)
+                                    showLocationOnMap(cached.latitude, cached.longitude)
+                                } else {
+                                    onNoFix()
+                                }
+                            }
+                            .addOnFailureListener(this) { onNoFix() }
                     }
                 }
-            }
-            .addOnFailureListener {
-                Toast.makeText(this, "위치 조회 실패: ${it.message}", Toast.LENGTH_SHORT).show()
-                showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
-            }
+                .addOnFailureListener(this) { onNoFix() }
+        } catch (e: SecurityException) {
+            onNoFix()
+        }
+    }
+
+    /** 현재 위치를 찾게 된 계기. 위치를 못 얻었을 때 어떻게 알릴지 정한다. */
+    private enum class LocateTrigger { START, USER, RETURNED_FROM_SETTINGS }
+
+    /** 현재 위치 없이 처음 보일 지역(기본 좌표)으로 카메라만 옮긴다. 현재 위치 마커는 찍지 않는다. */
+    private fun showDefaultArea() {
+        kakaoMap?.moveCamera(CameraUpdateFactory.newCenterPosition(LatLng.from(DEFAULT_LAT, DEFAULT_LNG), 16))
+    }
+
+    /** 🎯: 위치 권한이 없을 때. 시스템이 다시 물어볼 수 있으면 권한 창을, 아니면 앱 설정을 연다. */
+    private fun showLocationPermissionGuide() {
+        val canAsk = ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.ACCESS_COARSE_LOCATION) ||
+            ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.ACCESS_FINE_LOCATION)
+        val builder = AlertDialog.Builder(this)
+            .setTitle("위치 권한이 필요합니다")
+            .setNegativeButton("닫기", null)
+        if (canAsk) {
+            builder.setMessage("위치 권한이 없어 현재 위치를 표시할 수 없습니다.\n내 위치를 보려면 위치 권한을 허용해 주세요.")
+                .setPositiveButton("권한 허용") { _, _ -> requestLocationPermissions() }
+        } else {
+            builder.setMessage("위치 권한이 없어 현재 위치를 표시할 수 없습니다.\n설정 > 권한 > 위치에서 「앱 사용 중에만 허용」을 골라 주세요.")
+                .setPositiveButton("설정 열기") { _, _ ->
+                    openSettings(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
+                }
+        }
+        builder.show()
+    }
+
+    /** 🎯: 권한은 있는데 위치를 얻지 못했을 때. 기기 위치가 꺼져 있으면 위치 설정을, 아니면 다시 시도를 권한다. */
+    private fun showLocationUnavailableGuide() {
+        val locationManager = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
+        val locationOn = locationManager == null || LocationManagerCompat.isLocationEnabled(locationManager)
+        val builder = AlertDialog.Builder(this)
+            .setTitle("현재 위치를 확인할 수 없습니다")
+            .setNegativeButton("닫기", null)
+        if (locationOn) {
+            builder.setMessage("현재 위치를 확인하지 못했습니다.\n실내·지하에서는 시간이 걸릴 수 있습니다. 잠시 후 다시 시도해 주세요.")
+                .setPositiveButton("다시 시도") { _, _ -> moveToCurrentLocation(LocateTrigger.USER) }
+        } else {
+            builder.setMessage("기기의 위치가 꺼져 있어 현재 위치를 확인할 수 없습니다.\n위치 설정에서 위치를 켜 주세요.")
+                .setPositiveButton("위치 설정 열기") { _, _ -> openSettings(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
+        }
+        builder.show()
+    }
+
+    private fun openSettings(intent: Intent) {
+        try {
+            locateOnResume = true
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            locateOnResume = false
+            Toast.makeText(this, "설정 화면을 열 수 없습니다. 기기 설정에서 직접 바꿔 주세요.", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun hasFineLocation(): Boolean =
