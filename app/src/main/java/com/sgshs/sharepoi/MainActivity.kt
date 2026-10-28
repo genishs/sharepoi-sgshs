@@ -34,6 +34,7 @@ import com.google.android.gms.tasks.CancellationTokenSource
 import com.kakao.vectormap.KakaoMap
 import com.kakao.vectormap.KakaoMapReadyCallback
 import com.kakao.vectormap.KakaoMapSdk
+import com.kakao.vectormap.MapAuthException
 import com.kakao.vectormap.MapLifeCycleCallback
 import com.kakao.vectormap.MapView
 import com.kakao.vectormap.camera.CameraUpdateFactory
@@ -64,6 +65,12 @@ class MainActivity : AppCompatActivity() {
 
     // Last real device location obtained from FusedLocationProvider (null until first fix)
     private var lastKnownLocation: Location? = null
+
+    /** 설치된 앱의 서명 키 해시. KA 헤더에 쓴다(검색 스레드에서도 읽으므로 lazy 는 동기화 기본값). */
+    private val keyHash: String by lazy { computeKeyHash() }
+
+    /** 지도 오류 안내가 겹쳐 뜨지 않게 잡아 둔다. */
+    private var mapErrorDialog: AlertDialog? = null
 
     private lateinit var btnShare: Button
     private lateinit var btnRoadview: Button
@@ -105,8 +112,10 @@ class MainActivity : AppCompatActivity() {
         // Initialize Kakao SDK before setContentView
         KakaoMapSdk.init(this, BuildConfig.KAKAO_MAP_API_KEY)
 
-        val signingKeyHash = computeKeyHash()
-        Log.i("MainActivity", "signing key hash=$signingKeyHash pkg=$packageName")
+        // 키 해시는 카카오 KA 헤더(buildKaHeader)에 쓰는 기능이라 계산은 그대로 하되, 로그는 디버그 빌드에서만 남긴다.
+        if (BuildConfig.DEBUG) {
+            Log.i(TAG, "signing key hash=$keyHash pkg=$packageName")
+        }
 
         setContentView(R.layout.activity_main)
 
@@ -140,9 +149,19 @@ class MainActivity : AppCompatActivity() {
             override fun onMapDestroy() {}
 
             override fun onMapError(error: Exception?) {
-                val diagnosticText = buildAuthDiagnosticText(error)
-                Log.e("MainActivity", "Kakao map error diagnostic:\n$diagnosticText", error)
-                showAuthDiagnosticDialog(diagnosticText)
+                if (isFinishing || isDestroyed) return
+                if (mapErrorDialog?.isShowing == true) return
+                if (BuildConfig.DEBUG) {
+                    // 개발용: 패키지명·키 해시·서명자·스택을 보여 카카오 콘솔 등록값과 맞춰 볼 수 있게 한다.
+                    val diagnosticText = buildAuthDiagnosticText(error)
+                    Log.e(TAG, "Kakao map error diagnostic:\n$diagnosticText", error)
+                    showAuthDiagnosticDialog(diagnosticText)
+                } else {
+                    // 릴리스: 진단 정보(키 해시·서명자·스택) 없이 일반 안내와 다시 시도만.
+                    val code = (error as? MapAuthException)?.errorCode
+                    Log.w(TAG, "Kakao map error: ${error?.javaClass?.simpleName} code=$code")
+                    showMapErrorDialog(SearchErrors.classifyMapError(code))
+                }
             }
         }, object : KakaoMapReadyCallback() {
             override fun onMapReady(map: KakaoMap) {
@@ -369,7 +388,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 지도 인증 오류(onMapError) 진단 정보를 사람이 읽을 수 있는 텍스트로 조립한다.
+     * 지도 인증 오류(onMapError) 진단 정보를 사람이 읽을 수 있는 텍스트로 조립한다. 디버그 빌드 전용.
      */
     private fun buildAuthDiagnosticText(error: Exception?): String {
         val signers = computeAllSignerHashes().joinToString(", ")
@@ -380,7 +399,7 @@ class MainActivity : AppCompatActivity() {
 
         return buildString {
             append("pkg=$packageName\n")
-            append("keyHash=${computeKeyHash()}\n")
+            append("keyHash=$keyHash\n")
             append("signers=$signers\n")
             append("sdkInt=${Build.VERSION.SDK_INT}\n")
             append("error=${error?.javaClass?.name}: ${error?.message}\n")
@@ -393,7 +412,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 지도 인증 오류 진단 다이얼로그. 본문은 선택/복사 가능하며, "복사" 버튼으로 클립보드에 전체 복사한다.
+     * 지도 인증 오류 진단 다이얼로그(디버그 빌드 전용). 본문은 선택/복사 가능하며, "복사" 버튼으로 클립보드에 전체 복사한다.
      */
     private fun showAuthDiagnosticDialog(diagnosticText: String) {
         val messageView = TextView(this@MainActivity).apply {
@@ -403,7 +422,7 @@ class MainActivity : AppCompatActivity() {
             setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
         }
 
-        AlertDialog.Builder(this@MainActivity)
+        mapErrorDialog = AlertDialog.Builder(this@MainActivity)
             .setTitle("지도 인증 오류")
             .setView(messageView)
             .setPositiveButton("복사") { _, _ ->
@@ -412,18 +431,32 @@ class MainActivity : AppCompatActivity() {
                 clipboard.setPrimaryClip(clip)
                 Toast.makeText(this@MainActivity, "복사됨", Toast.LENGTH_SHORT).show()
             }
+            .setNeutralButton("다시 시도") { _, _ -> recreate() }
             .setNegativeButton("닫기", null)
             .show()
     }
 
     /**
-     * computeKeyHash()로 얻은 서명 키 해시를 이용해 Kakao KA 헤더를 조립한다.
+     * 릴리스 빌드의 지도 오류 안내. 진단 정보 없이 원인 갈래(연결·한도·그 밖)만 알리고 다시 시도를 준다.
+     * 다시 시도는 화면을 새로 만들어 지도 SDK 를 처음부터 다시 시작한다.
+     */
+    private fun showMapErrorDialog(kind: FailureKind) {
+        mapErrorDialog = AlertDialog.Builder(this)
+            .setTitle("지도를 불러오지 못했습니다")
+            .setMessage(SearchErrors.mapFailureMessage(kind))
+            .setPositiveButton("다시 시도") { _, _ -> recreate() }
+            .setNegativeButton("닫기", null)
+            .show()
+    }
+
+    /**
+     * 서명 키 해시(keyHash)를 이용해 Kakao KA 헤더를 조립한다.
      */
     private fun buildKaHeader(): String {
         val sdkVersion = "2.14.1"
         val osVersion = "android-${Build.VERSION.SDK_INT}"
         val pkgName = packageName
-        val origin = computeKeyHash()
+        val origin = keyHash
 
         return "sdk/$sdkVersion os/$osVersion origin/$origin android_pkg/$pkgName"
     }

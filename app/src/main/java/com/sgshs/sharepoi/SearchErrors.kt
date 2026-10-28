@@ -3,7 +3,7 @@ package com.sgshs.sharepoi
 import java.io.IOException
 
 /**
- * 장소 검색(카카오 Local API)이 실패한 원인. 어떤 안내 문구를 보일지 고르는 데 쓴다.
+ * 장소 검색(카카오 Local API)·지도 로딩이 실패한 원인. 어떤 안내 문구를 보일지 고르는 데 쓴다.
  * 안드로이드 API 에 기대지 않아 단위 시험으로 확인한다.
  */
 enum class FailureKind {
@@ -75,6 +75,17 @@ object SearchErrors {
     fun classifyException(e: Throwable): FailureKind =
         if (e is IOException) FailureKind.NETWORK else FailureKind.SERVICE
 
+    /**
+     * 카카오 지도 SDK 의 MapAuthException.errorCode 를 분류한다. 오류가 MapAuthException 이 아니면 null 을 넘긴다.
+     * SDK 상수: -2 연결 시작 실패, -3 소켓 시간 초과, -4 연결 시간 초과, 499 통신 실패, 1003 앱 키 오류.
+     */
+    fun classifyMapError(errorCode: Int?): FailureKind = when (errorCode) {
+        -2, -3, -4, 499 -> FailureKind.NETWORK
+        429 -> FailureKind.QUOTA
+        401, 403, 1003 -> FailureKind.AUTH
+        else -> FailureKind.SERVICE
+    }
+
     /** 여러 요청 결과와 (중복을 걸러 낸) 장소 수로 결론을 낸다. */
     fun summarize(outcomes: List<RequestOutcome>, totalFound: Int): SearchSummary {
         val failures = outcomes.filterIsInstance<RequestOutcome.Failed>()
@@ -113,6 +124,17 @@ object SearchErrors {
         FailureKind.AUTH -> "검색 서비스 인증 오류로 일부 결과가 빠졌을 수 있습니다."
         FailureKind.QUOTA -> "검색 요청 한도에 걸려 일부 결과가 빠졌을 수 있습니다."
         FailureKind.SERVICE -> "검색 서비스 오류${httpSuffix(cause.httpCode)}로 일부 결과가 빠졌을 수 있습니다."
+    }
+
+    /**
+     * 릴리스 빌드에서 지도를 불러오지 못했을 때의 일반 안내. 패키지명·키 해시·서명자·스택 같은
+     * 진단 정보는 넣지 않는다(디버그 빌드에서만 진단 대화상자로 보인다).
+     */
+    fun mapFailureMessage(kind: FailureKind): String = when (kind) {
+        FailureKind.NETWORK -> "지도 서버에 연결하지 못했습니다.\n인터넷 연결을 확인한 뒤 다시 시도해 주세요."
+        FailureKind.QUOTA -> "지도 이용 요청이 많아 잠시 제한되었습니다.\n잠시 후 다시 시도해 주세요."
+        FailureKind.AUTH, FailureKind.SERVICE ->
+            "지도를 불러오지 못했습니다.\n잠시 후 다시 시도해 주세요. 계속되면 앱을 최신 버전으로 업데이트해 주세요."
     }
 
     private fun httpSuffix(code: Int?): String = if (code != null) "(HTTP $code)" else ""

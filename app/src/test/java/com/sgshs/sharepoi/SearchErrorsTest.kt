@@ -73,6 +73,28 @@ class SearchErrorsTest {
         assertEquals(FailureKind.SERVICE, SearchErrors.classifyException(NumberFormatException()))
     }
 
+    // --- 지도 SDK 오류 분류(#15 릴리스 안내) ---
+
+    @Test
+    fun mapErrorCodes() {
+        for (code in listOf(-2, -3, -4, 499)) assertEquals("code $code", FailureKind.NETWORK, SearchErrors.classifyMapError(code))
+        assertEquals(FailureKind.QUOTA, SearchErrors.classifyMapError(429))
+        for (code in listOf(401, 403, 1003)) assertEquals("code $code", FailureKind.AUTH, SearchErrors.classifyMapError(code))
+        assertEquals(FailureKind.SERVICE, SearchErrors.classifyMapError(-1))
+        assertEquals(FailureKind.SERVICE, SearchErrors.classifyMapError(null))
+    }
+
+    @Test
+    fun releaseMapMessagesCarryNoDiagnostics() {
+        for (kind in FailureKind.values()) {
+            val msg = SearchErrors.mapFailureMessage(kind)
+            for (leak in listOf("keyHash", "키 해시", "signers", "서명", "pkg=", "com.sgshs", "Exception", "\tat ")) {
+                assertFalse("$kind: $leak", msg.contains(leak))
+            }
+            assertTrue(msg.contains("다시 시도"))
+        }
+    }
+
     // --- 결론 모으기 ---
 
     private val net = RequestOutcome.Failed(FailureKind.NETWORK)
