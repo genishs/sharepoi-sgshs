@@ -95,8 +95,9 @@ class LocationShareViewModel(application: Application) : AndroidViewModel(applic
 
         handler.postDelayed({ token.cancel(); finishWithCache() }, SHARE_FIX_TIMEOUT_MS)
         try {
-            val priority = if (precise) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY
-            fusedLocationClient.getCurrentLocation(priority, token.token)
+            // 대략적 위치 권한만 있어도 HIGH_ACCURACY 로 요청한다. 결과는 FLP 가 권한 수준(대략)으로 낮춰 주며,
+            // BALANCED 는 네트워크 위치가 없는 환경에서 시간 안에 위치를 못 준다.
+            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, token.token)
                 .addOnSuccessListener { location -> if (location != null) finish(location, precise) else finishWithCache() }
                 .addOnFailureListener { finishWithCache() }
         } catch (e: SecurityException) {

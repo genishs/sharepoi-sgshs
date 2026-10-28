@@ -309,10 +309,11 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // 대략적 위치만 허용됐어도 그 위치로 옮긴다(#11). 정확도 요청은 권한에 맞춘다.
+        // 대략적 위치만 허용됐어도 그 위치로 옮긴다(#11). 요청은 HIGH_ACCURACY 로 하고, 대략적 위치 권한이면
+        // FLP 가 결과를 대략적 수준으로 낮춰 준다(BALANCED 는 네트워크 위치가 없으면 시간 안에 위치를 못 준다).
         val cts = CancellationTokenSource()
         try {
-            fusedLocationClient.getCurrentLocation(locationPriority(hasFine), cts.token)
+            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cts.token)
                 .addOnSuccessListener(this) { location ->
                     if (location != null) {
                         rememberFix(location, hasFine)
@@ -396,10 +397,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun hasCoarseLocation(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-
-    /** 정확한 위치 권한이 있으면 GPS 수준, 대략적 위치만 있으면 그에 맞는 정확도로 요청한다. */
-    private fun locationPriority(precise: Boolean): Int =
-        if (precise) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY
 
     private fun rememberFix(location: Location, precise: Boolean) {
         shareViewModel.rememberFix(location, precise)
