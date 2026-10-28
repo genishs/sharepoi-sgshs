@@ -13,9 +13,6 @@ import android.location.Location
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.os.SystemClock
 import android.util.Base64
 import android.util.Log
 import android.widget.Button
@@ -27,6 +24,7 @@ import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.ViewModelProvider
 import com.google.android.gms.location.FusedLocationProviderClient
 import com.google.android.gms.location.LocationServices
 import com.google.android.gms.location.Priority
@@ -64,11 +62,8 @@ class MainActivity : AppCompatActivity() {
     private val DEFAULT_LAT = 37.5667
     private val DEFAULT_LNG = 126.8273
 
-    // Last real device location obtained from FusedLocationProvider (null until first fix)
-    private var lastKnownLocation: Location? = null
-
-    /** lastKnownLocation 이 정확한 위치 권한으로 얻은 것인지(대략적 위치면 false) */
-    private var lastKnownPrecise = false
+    // 공유 위치 확인·마지막 실제 위치를 화면 재생성(회전) 너머로 이어 간다(#29)
+    private lateinit var shareViewModel: LocationShareViewModel
 
     /** 설치된 앱의 서명 키 해시. KA 헤더에 쓴다(검색 스레드에서도 읽으므로 lazy 는 동기화 기본값). */
     private val keyHash: String by lazy { computeKeyHash() }
@@ -85,8 +80,6 @@ class MainActivity : AppCompatActivity() {
     private lateinit var btnMyLocation: Button
 
     private val PERMISSION_REQUEST_CODE = 1000
-    private val SHARE_FIX_TIMEOUT_MS = 6000L
-    private val CACHE_MAX_AGE_MS = 120_000L
 
     private companion object {
         const val TAG = "MainActivity"
@@ -150,6 +143,16 @@ class MainActivity : AppCompatActivity() {
         btnMyLocation = findViewById(R.id.btnMyLocation)
 
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this)
+
+        shareViewModel = ViewModelProvider(this)[LocationShareViewModel::class.java]
+        shareViewModel.sharing.observe(this) { inProgress -> btnShare.isEnabled = !inProgress }
+        // 회전 전에 시작한 공유의 결과도 여기로 온다. 받으면 바로 지워 한 번만 처리한다.
+        shareViewModel.shareResult.observe(this) { result ->
+            if (result != null) {
+                shareViewModel.consumeShareResult()
+                handleShareResult(result)
+            }
+        }
 
         mapView = findViewById(R.id.mapView)
         mapView.start(object : MapLifeCycleCallback() {
@@ -312,8 +315,7 @@ class MainActivity : AppCompatActivity() {
         if (precise) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY
 
     private fun rememberFix(location: Location, precise: Boolean) {
-        lastKnownLocation = location
-        lastKnownPrecise = precise
+        shareViewModel.rememberFix(location, precise)
     }
 
     private fun showLocationOnMap(latitude: Double, longitude: Double) {
@@ -748,66 +750,35 @@ class MainActivity : AppCompatActivity() {
         return bitmap
     }
 
-    private var sharing = false
-
     /**
-     * 위치 공유: 공유 시점에 위치를 다시 요청한다(최대 SHARE_FIX_TIMEOUT_MS).
+     * 위치 공유: 공유 시점에 위치를 다시 요청한다(최대 6초, LocationShareViewModel).
      * 정확한 위치 권한이면 「현재 위치」로, 대략적 위치 권한만 있으면 대략적 위치임을 밝혀 보낸다(#11).
      * 위치를 아예 얻지 못했을 때만 지도 중심이나 기본 좌표를 "현재 위치"로 보내지 않고,
      * 안내 대화상자에서 "지도에서 고른 위치"로 보낼지 묻는다.
+     * 위치 확인 중 화면이 회전돼도 요청은 ViewModel 에서 이어지고, 새 화면이 결과를 받아 처리한다(#29).
      */
     private fun shareLocation() {
-        if (sharing) return
+        if (shareViewModel.sharing.value == true) return
         val precise = hasFineLocation()
         if (!precise && !hasCoarseLocation()) {
             showNoFixDialog("위치 권한이 없어 현재 위치를 확인할 수 없습니다.")
             return
         }
 
-        sharing = true
-        btnShare.isEnabled = false
-        val checking = if (precise) "현재 위치를 확인하는 중입니다…" else "대략적인 현재 위치를 확인하는 중입니다…"
-        Toast.makeText(this, checking, Toast.LENGTH_SHORT).show()
-
-        val cts = CancellationTokenSource()
-        val handler = Handler(Looper.getMainLooper())
-        var finished = false
-        // fixPrecise: 그 위치가 정확한 위치 권한으로 얻은 것인지
-        val finish: (Location?, Boolean) -> Unit = finish@{ location, fixPrecise ->
-            if (finished) return@finish
-            finished = true
-            handler.removeCallbacksAndMessages(null)
-            sharing = false
-            btnShare.isEnabled = true
-            if (isFinishing || isDestroyed) return@finish
-            if (location != null) {
-                rememberFix(location, fixPrecise)
-                val kind = if (fixPrecise) ShareKind.CURRENT_PRECISE else ShareKind.CURRENT_APPROXIMATE
-                startShareChooser(kind, location.latitude, location.longitude)
-            } else {
-                showNoFixDialog("현재 위치를 확인하지 못했습니다. 위치(GPS)가 켜져 있는지 확인해 주세요.")
-            }
-        }
-        val finishWithCache = {
-            val cached = freshCachedLocation()
-            // 캐시가 대략적 위치였거나 지금 권한이 대략적 위치뿐이면 대략적 위치로 본다.
-            finish(cached, cached != null && lastKnownPrecise && precise)
-        }
-        handler.postDelayed({ cts.cancel(); finishWithCache() }, SHARE_FIX_TIMEOUT_MS)
-        try {
-            fusedLocationClient.getCurrentLocation(locationPriority(precise), cts.token)
-                .addOnSuccessListener { location -> if (location != null) finish(location, precise) else finishWithCache() }
-                .addOnFailureListener { finishWithCache() }
-        } catch (e: SecurityException) {
-            finish(null, false)
+        if (shareViewModel.startShare(precise)) {
+            val checking = if (precise) "현재 위치를 확인하는 중입니다…" else "대략적인 현재 위치를 확인하는 중입니다…"
+            Toast.makeText(this, checking, Toast.LENGTH_SHORT).show()
         }
     }
 
-    /** 최근(CACHE_MAX_AGE_MS 이내)에 얻은 실제 위치만 인정한다. 오래된 캐시는 쓰지 않는다. */
-    private fun freshCachedLocation(): Location? {
-        val known = lastKnownLocation ?: return null
-        val ageMs = (SystemClock.elapsedRealtimeNanos() - known.elapsedRealtimeNanos) / 1_000_000
-        return if (ageMs in 0..CACHE_MAX_AGE_MS) known else null
+    private fun handleShareResult(result: LocationShareViewModel.ShareResult) {
+        if (isFinishing || isDestroyed) return
+        when (result) {
+            is LocationShareViewModel.ShareResult.Ready ->
+                startShareChooser(result.kind, result.latitude, result.longitude)
+            LocationShareViewModel.ShareResult.NoFix ->
+                showNoFixDialog("현재 위치를 확인하지 못했습니다. 위치(GPS)가 켜져 있는지 확인해 주세요.")
+        }
     }
 
     private fun showNoFixDialog(reason: String) {

@@ -78,6 +78,9 @@ dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("androidx.constraintlayout:constraintlayout:2.1.4")
+    // 공유 위치 확인을 회전 너머로 잇는 ViewModel·LiveData(#29). appcompat 1.6.1 이 이미 끌어오는 버전과 같다.
+    implementation("androidx.lifecycle:lifecycle-viewmodel:2.5.1")
+    implementation("androidx.lifecycle:lifecycle-livedata-core:2.5.1")
 
     testImplementation("junit:junit:4.13.2")
 }
