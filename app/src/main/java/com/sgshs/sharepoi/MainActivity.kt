@@ -43,8 +43,8 @@ import com.kakao.vectormap.label.LabelOptions
 import com.kakao.vectormap.label.LabelStyle
 import com.kakao.vectormap.label.LabelStyles
 import com.kakao.vectormap.LatLng
-import org.json.JSONArray
 import org.json.JSONObject
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -76,6 +76,16 @@ class MainActivity : AppCompatActivity() {
     private val PERMISSION_REQUEST_CODE = 1000
     private val SHARE_FIX_TIMEOUT_MS = 6000L
     private val CACHE_MAX_AGE_MS = 120_000L
+
+    private companion object {
+        const val TAG = "MainActivity"
+
+        /** 카카오 Local API 연결·읽기 시간 제한(각각) */
+        const val HTTP_TIMEOUT_MS = 10_000
+
+        /** 한도 초과 판별용으로 읽는 오류 응답 본문 최대 길이 */
+        const val ERROR_BODY_LIMIT = 4_096
+    }
 
     // 주변 편의시설 카테고리 (카카오 category_group_code): (라벨, 코드, 이모지)
     private val placeCategories = listOf(
@@ -426,8 +436,9 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "지도 중심 주변 4가지 소스(공중/개방/관공서/주유소) 통합 검색 중...", Toast.LENGTH_SHORT).show()
 
         Thread {
+            val allDocuments = ArrayList<JSONObject>()
+            val outcomes = ArrayList<RequestOutcome>()
             try {
-                val allDocuments = JSONArray()
                 val seenIds = HashSet<String>()
 
                 val searchUrls = listOf(
@@ -440,71 +451,157 @@ class MainActivity : AppCompatActivity() {
                 val kaHeader = buildKaHeader()
 
                 for (urlString in searchUrls) {
-                    try {
-                        val url = URL(urlString)
-                        val conn = url.openConnection() as HttpURLConnection
-                        conn.requestMethod = "GET"
-                        conn.setRequestProperty("Authorization", "KakaoAK ${BuildConfig.KAKAO_REST_API_KEY}")
-                        conn.setRequestProperty("KA", kaHeader)
-
-                        if (conn.responseCode == 200) {
-                            val responseText = conn.inputStream.bufferedReader().use { it.readText() }
-                            val jsonObject = JSONObject(responseText)
-                            val docs = jsonObject.getJSONArray("documents")
-
-                            for (i in 0 until docs.length()) {
-                                val item = docs.getJSONObject(i)
-                                val id = item.optString("id", "")
-                                val name = item.optString("place_name", "")
-                                val key = if (id.isNotEmpty()) id else name
-
-                                if (!seenIds.contains(key)) {
-                                    seenIds.add(key)
-                                    item.put("display_icon", "🚽")
-                                    allDocuments.put(item)
-                                }
-                            }
+                    when (val response = requestLocal(urlString, kaHeader)) {
+                        is LocalResponse.Page -> {
+                            mergeDocuments(response.documents, seenIds, allDocuments, "🚽")
+                            outcomes.add(RequestOutcome.Ok(response.documents.size))
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
+                        is LocalResponse.Error -> outcomes.add(response.failure)
                     }
                 }
-
-                runOnUiThread {
-                    displayMarkers(allDocuments, R.drawable.restroom_marker, "restroomLayer", "화장실")
-                }
             } catch (e: Exception) {
-                e.printStackTrace()
-                runOnUiThread {
-                    Toast.makeText(this, "네트워크 오류: ${e.message}", Toast.LENGTH_SHORT).show()
+                // 요청 밖에서 난 예상 못 한 오류도 「결과 없음」이 아니라 실패로 알린다.
+                if (BuildConfig.DEBUG) Log.w(TAG, "Restroom search failed", e)
+                outcomes.add(RequestOutcome.Failed(SearchErrors.classifyException(e)))
+            }
+
+            val summary = SearchErrors.summarize(outcomes, allDocuments.size)
+            runOnUiThread {
+                showSearchResult(summary, allDocuments, R.drawable.restroom_marker, "restroomLayer", "화장실") {
+                    fetchNearbyRestroomsMultiSource()
                 }
             }
         }.start()
     }
 
-    private fun displayMarkers(documents: JSONArray, markerDrawableId: Int, layerId: String, categoryLabel: String) {
-        val map = kakaoMap ?: return
-        val count = documents.length()
-        if (count == 0) {
-            Toast.makeText(this, "주변 2km 이내에 검색된 ${categoryLabel} 정보가 없습니다.", Toast.LENGTH_SHORT).show()
-            return
-        }
+    /** 카카오 Local API 응답 한 번의 결과. */
+    private sealed class LocalResponse {
+        class Page(val documents: List<JSONObject>, val isEnd: Boolean) : LocalResponse()
+        class Error(val failure: RequestOutcome.Failed) : LocalResponse()
+    }
 
-        val labelManager = map.labelManager ?: return
+    /**
+     * 카카오 Local API 에 GET 을 한 번 보낸다. 200 이면 장소 목록을, 그 밖의 응답·예외는 원인을 분류해 돌려준다.
+     * 연결·읽기 시간 제한을 두고, 연결은 항상 닫는다. (백그라운드 스레드에서 부른다)
+     */
+    private fun requestLocal(urlString: String, kaHeader: String): LocalResponse {
+        var conn: HttpURLConnection? = null
+        return try {
+            conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
+                requestMethod = "GET"
+                connectTimeout = HTTP_TIMEOUT_MS
+                readTimeout = HTTP_TIMEOUT_MS
+                setRequestProperty("Authorization", "KakaoAK ${BuildConfig.KAKAO_REST_API_KEY}")
+                setRequestProperty("KA", kaHeader)
+            }
+            val code = conn.responseCode
+            if (code == HttpURLConnection.HTTP_OK) {
+                val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
+                val docs = json.getJSONArray("documents")
+                val items = (0 until docs.length()).map { docs.getJSONObject(it) }
+                val meta = json.optJSONObject("meta")
+                LocalResponse.Page(items, meta == null || meta.optBoolean("is_end", true))
+            } else {
+                val kind = SearchErrors.classifyHttp(code, readErrorBody(conn))
+                if (BuildConfig.DEBUG) Log.w(TAG, "Local API HTTP $code -> $kind")
+                LocalResponse.Error(RequestOutcome.Failed(kind, code))
+            }
+        } catch (e: Exception) {
+            val kind = SearchErrors.classifyException(e)
+            if (BuildConfig.DEBUG) Log.w(TAG, "Local API request failed -> $kind", e)
+            LocalResponse.Error(RequestOutcome.Failed(kind))
+        } finally {
+            conn?.disconnect()
+        }
+    }
+
+    /** 오류 응답 본문 앞부분(한도 초과 판별용). 읽지 못하면 null. */
+    private fun readErrorBody(conn: HttpURLConnection): String? = try {
+        conn.errorStream?.bufferedReader()?.use { reader ->
+            val sb = StringBuilder()
+            val buf = CharArray(512)
+            while (sb.length < ERROR_BODY_LIMIT) {
+                val n = reader.read(buf)
+                if (n < 0) break
+                sb.append(buf, 0, n)
+            }
+            sb.toString()
+        }
+    } catch (e: IOException) {
+        null
+    }
+
+    /** id(없으면 이름)로 중복을 걸러 [into] 에 더한다. */
+    private fun mergeDocuments(docs: List<JSONObject>, seenIds: MutableSet<String>, into: MutableList<JSONObject>, icon: String) {
+        for (item in docs) {
+            val id = item.optString("id", "")
+            val key = if (id.isNotEmpty()) id else item.optString("place_name", "")
+            if (seenIds.add(key)) {
+                item.put("display_icon", icon)
+                into.add(item)
+            }
+        }
+    }
+
+    /**
+     * 검색 결론을 화면에 보인다. 모든 요청이 성공했는데 결과가 없을 때만 「주변에 없음」으로 안내하고,
+     * 실패(네트워크·인증·한도·서비스 오류)는 원인별 안내와 다시 시도를 보인다.
+     */
+    private fun showSearchResult(
+        summary: SearchSummary,
+        documents: List<JSONObject>,
+        markerDrawableId: Int,
+        layerId: String,
+        categoryLabel: String,
+        retry: () -> Unit
+    ) {
+        if (isFinishing || isDestroyed) return
+        when (summary) {
+            is SearchSummary.Failed ->
+                showSearchFailureDialog(SearchErrors.searchFailureMessage(summary.cause, categoryLabel), retry)
+            SearchSummary.NoResults ->
+                Toast.makeText(this, "주변 2km 이내에 검색된 ${categoryLabel} 정보가 없습니다.", Toast.LENGTH_SHORT).show()
+            is SearchSummary.Found -> {
+                val shown = displayMarkers(documents, markerDrawableId, layerId)
+                if (shown == 0) {
+                    Toast.makeText(this, "지도를 불러오지 못해 검색 결과를 표시할 수 없습니다.", Toast.LENGTH_LONG).show()
+                    return
+                }
+                val note = summary.partialFailure?.let { "\n" + SearchErrors.partialFailureNote(it) } ?: ""
+                Toast.makeText(this, "검색 완료! 총 ${shown}개의 ${categoryLabel}을(를) 표시했습니다. 핀을 터치해 상세 정보를 확인하세요!$note", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun showSearchFailureDialog(message: String, retry: () -> Unit) {
+        AlertDialog.Builder(this)
+            .setTitle("검색하지 못했습니다")
+            .setMessage(message)
+            .setPositiveButton("다시 시도") { _, _ -> retry() }
+            .setNegativeButton("닫기", null)
+            .show()
+    }
+
+    /** 장소 핀을 지도에 올린다. 올린 핀 수를 돌려준다(지도가 없으면 0). */
+    private fun displayMarkers(documents: List<JSONObject>, markerDrawableId: Int, layerId: String): Int {
+        val map = kakaoMap ?: return 0
+        val labelManager = map.labelManager ?: return 0
 
         val layer = labelManager.getLayer(layerId)
             ?: labelManager.addLayer(LabelLayerOptions.from(layerId).setZOrder(10000))
+            ?: return 0
 
         val bitmap = getBitmapFromVector(this, markerDrawableId)
         val styles = labelManager.addLabelStyles(
             LabelStyles.from(LabelStyle.from(bitmap).setAnchorPoint(0.5f, 0.5f))
         )
 
-        for (i in 0 until count) {
-            val item = documents.getJSONObject(i)
+        var shown = 0
+        documents.forEachIndexed { i, item ->
+            val itemLat = item.optString("y").toDoubleOrNull()
+            val itemLng = item.optString("x").toDoubleOrNull()
+            if (itemLat == null || itemLng == null) return@forEachIndexed
             val id = item.optString("id", "${layerId}_$i")
-            val itemLat = item.getString("y").toDouble()
-            val itemLng = item.getString("x").toDouble()
 
             val position = LatLng.from(itemLat, itemLng)
             // Attach item JSONObject as Tag
@@ -512,10 +609,10 @@ class MainActivity : AppCompatActivity() {
                 .setStyles(styles)
                 .setTag(item)
 
-            layer?.addLabel(options)
+            layer.addLabel(options)
+            shown++
         }
-
-        Toast.makeText(this, "검색 완료! 총 ${count}개의 ${categoryLabel}을(를) 표시했습니다. 핀을 터치해 상세 정보를 확인하세요!", Toast.LENGTH_LONG).show()
+        return shown
     }
 
     /**
@@ -545,55 +642,36 @@ class MainActivity : AppCompatActivity() {
         Toast.makeText(this, "지도 중심 주변 ${categoryLabel} 검색 중...", Toast.LENGTH_SHORT).show()
 
         Thread {
+            val allDocuments = ArrayList<JSONObject>()
+            val outcomes = ArrayList<RequestOutcome>()
             try {
-                val allDocuments = JSONArray()
                 val seenIds = HashSet<String>()
                 val kaHeader = buildKaHeader()
 
                 for (page in 1..3) {
                     val urlString = "https://dapi.kakao.com/v2/local/search/category.json?category_group_code=$categoryCode&x=$lng&y=$lat&radius=2000&sort=distance&page=$page&size=15"
-                    try {
-                        val url = URL(urlString)
-                        val conn = url.openConnection() as HttpURLConnection
-                        conn.requestMethod = "GET"
-                        conn.setRequestProperty("Authorization", "KakaoAK ${BuildConfig.KAKAO_REST_API_KEY}")
-                        conn.setRequestProperty("KA", kaHeader)
-
-                        if (conn.responseCode == 200) {
-                            val responseText = conn.inputStream.bufferedReader().use { it.readText() }
-                            val jsonObject = JSONObject(responseText)
-                            val docs = jsonObject.getJSONArray("documents")
-
-                            for (i in 0 until docs.length()) {
-                                val item = docs.getJSONObject(i)
-                                val id = item.optString("id", "")
-                                val name = item.optString("place_name", "")
-                                val key = if (id.isNotEmpty()) id else name
-
-                                if (!seenIds.contains(key)) {
-                                    seenIds.add(key)
-                                    item.put("display_icon", icon)
-                                    allDocuments.put(item)
-                                }
-                            }
-
-                            val meta = jsonObject.optJSONObject("meta")
-                            if (meta == null || meta.optBoolean("is_end", true)) break
-                        } else {
+                    when (val response = requestLocal(urlString, kaHeader)) {
+                        is LocalResponse.Page -> {
+                            mergeDocuments(response.documents, seenIds, allDocuments, icon)
+                            outcomes.add(RequestOutcome.Ok(response.documents.size))
+                            if (response.isEnd) break
+                        }
+                        is LocalResponse.Error -> {
+                            // 다음 페이지는 시도하지 않는다. 앞 페이지 결과가 있으면 그것만 보이고 일부 누락을 알린다.
+                            outcomes.add(response.failure)
                             break
                         }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
                     }
                 }
-
-                runOnUiThread {
-                    displayMarkers(allDocuments, R.drawable.place_marker, "placeLayer", categoryLabel)
-                }
             } catch (e: Exception) {
-                e.printStackTrace()
-                runOnUiThread {
-                    Toast.makeText(this, "네트워크 오류: ${e.message}", Toast.LENGTH_SHORT).show()
+                if (BuildConfig.DEBUG) Log.w(TAG, "Category search failed", e)
+                outcomes.add(RequestOutcome.Failed(SearchErrors.classifyException(e)))
+            }
+
+            val summary = SearchErrors.summarize(outcomes, allDocuments.size)
+            runOnUiThread {
+                showSearchResult(summary, allDocuments, R.drawable.place_marker, "placeLayer", categoryLabel) {
+                    fetchNearbyByCategory(categoryCode, icon, categoryLabel)
                 }
             }
         }.start()
