@@ -45,6 +45,7 @@ import com.kakao.vectormap.label.LabelStyle
 import com.kakao.vectormap.label.LabelStyles
 import com.kakao.vectormap.LatLng
 import org.json.JSONObject
+import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -65,6 +66,9 @@ class MainActivity : AppCompatActivity() {
 
     // Last real device location obtained from FusedLocationProvider (null until first fix)
     private var lastKnownLocation: Location? = null
+
+    /** lastKnownLocation 이 정확한 위치 권한으로 얻은 것인지(대략적 위치면 false) */
+    private var lastKnownPrecise = false
 
     /** 설치된 앱의 서명 키 해시. KA 헤더에 쓴다(검색 스레드에서도 읽으므로 lazy 는 동기화 기본값). */
     private val keyHash: String by lazy { computeKeyHash() }
@@ -92,6 +96,9 @@ class MainActivity : AppCompatActivity() {
 
         /** 한도 초과 판별용으로 읽는 오류 응답 본문 최대 길이 */
         const val ERROR_BODY_LIMIT = 4_096
+
+        /** 「정확한 위치를 켜면 더 정확해요」 안내를 이미 보였다는 표시 파일(noBackupFilesDir) */
+        const val PRECISE_HINT_MARKER = "precise_location_hint_shown"
     }
 
     // 주변 편의시설 카테고리 (카카오 category_group_code): (라벨, 코드, 이모지)
@@ -200,7 +207,10 @@ class MainActivity : AppCompatActivity() {
             }
         })
 
-        checkAndRequestPermissions()
+        // 회전 등으로 다시 만들어질 때는 묻지 않는다(진행 중인 권한 창의 결과는 새 화면으로 온다).
+        if (savedInstanceState == null) {
+            checkAndRequestPermissions()
+        }
 
         // Zoom Control Listeners
         btnZoomIn.setOnClickListener {
@@ -256,24 +266,24 @@ class MainActivity : AppCompatActivity() {
      * Falls back to Magoknaru Station only when permission is missing or no fix is available.
      */
     private fun moveToCurrentLocation() {
-        val hasFine = ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        val hasCoarse = ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        if (!hasFine && !hasCoarse) {
+        val hasFine = hasFineLocation()
+        if (!hasFine && !hasCoarseLocation()) {
             showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
             return
         }
 
+        // 대략적 위치만 허용됐어도 그 위치로 옮긴다(#11). 정확도 요청은 권한에 맞춘다.
         val cts = CancellationTokenSource()
-        fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cts.token)
+        fusedLocationClient.getCurrentLocation(locationPriority(hasFine), cts.token)
             .addOnSuccessListener { location ->
                 if (location != null) {
-                    lastKnownLocation = location
+                    rememberFix(location, hasFine)
                     showLocationOnMap(location.latitude, location.longitude)
                 } else {
                     // No fresh fix (e.g. GPS off) — try the cached one before falling back
                     fusedLocationClient.lastLocation.addOnSuccessListener { cached ->
                         if (cached != null) {
-                            lastKnownLocation = cached
+                            rememberFix(cached, hasFine)
                             showLocationOnMap(cached.latitude, cached.longitude)
                         } else {
                             Toast.makeText(this, "현재 위치를 가져올 수 없어 기본 위치(마곡나루역)를 표시합니다.", Toast.LENGTH_SHORT).show()
@@ -286,6 +296,21 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "위치 조회 실패: ${it.message}", Toast.LENGTH_SHORT).show()
                 showLocationOnMap(DEFAULT_LAT, DEFAULT_LNG)
             }
+    }
+
+    private fun hasFineLocation(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    private fun hasCoarseLocation(): Boolean =
+        ContextCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
+
+    /** 정확한 위치 권한이 있으면 GPS 수준, 대략적 위치만 있으면 그에 맞는 정확도로 요청한다. */
+    private fun locationPriority(precise: Boolean): Int =
+        if (precise) Priority.PRIORITY_HIGH_ACCURACY else Priority.PRIORITY_BALANCED_POWER_ACCURACY
+
+    private fun rememberFix(location: Location, precise: Boolean) {
+        lastKnownLocation = location
+        lastKnownPrecise = precise
     }
 
     private fun showLocationOnMap(latitude: Double, longitude: Double) {
@@ -724,27 +749,28 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * 위치 공유: 공유 시점에 위치를 다시 요청한다(최대 SHARE_FIX_TIMEOUT_MS).
-     * 새 위치를 얻지 못하면 지도 중심이나 기본 좌표를 "현재 위치"로 보내지 않고,
+     * 정확한 위치 권한이면 「현재 위치」로, 대략적 위치 권한만 있으면 대략적 위치임을 밝혀 보낸다(#11).
+     * 위치를 아예 얻지 못했을 때만 지도 중심이나 기본 좌표를 "현재 위치"로 보내지 않고,
      * 안내 대화상자에서 "지도에서 고른 위치"로 보낼지 묻는다.
      */
     private fun shareLocation() {
         if (sharing) return
-        val hasPermission =
-            ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED ||
-            ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED
-        if (!hasPermission) {
+        val precise = hasFineLocation()
+        if (!precise && !hasCoarseLocation()) {
             showNoFixDialog("위치 권한이 없어 현재 위치를 확인할 수 없습니다.")
             return
         }
 
         sharing = true
         btnShare.isEnabled = false
-        Toast.makeText(this, "현재 위치를 확인하는 중입니다…", Toast.LENGTH_SHORT).show()
+        val checking = if (precise) "현재 위치를 확인하는 중입니다…" else "대략적인 현재 위치를 확인하는 중입니다…"
+        Toast.makeText(this, checking, Toast.LENGTH_SHORT).show()
 
         val cts = CancellationTokenSource()
         val handler = Handler(Looper.getMainLooper())
         var finished = false
-        val finish: (Location?) -> Unit = finish@{ location ->
+        // fixPrecise: 그 위치가 정확한 위치 권한으로 얻은 것인지
+        val finish: (Location?, Boolean) -> Unit = finish@{ location, fixPrecise ->
             if (finished) return@finish
             finished = true
             handler.removeCallbacksAndMessages(null)
@@ -752,19 +778,25 @@ class MainActivity : AppCompatActivity() {
             btnShare.isEnabled = true
             if (isFinishing || isDestroyed) return@finish
             if (location != null) {
-                lastKnownLocation = location
-                startShareChooser("현재 제 위치입니다:", location.latitude, location.longitude)
+                rememberFix(location, fixPrecise)
+                val kind = if (fixPrecise) ShareKind.CURRENT_PRECISE else ShareKind.CURRENT_APPROXIMATE
+                startShareChooser(kind, location.latitude, location.longitude)
             } else {
                 showNoFixDialog("현재 위치를 확인하지 못했습니다. 위치(GPS)가 켜져 있는지 확인해 주세요.")
             }
         }
-        handler.postDelayed({ cts.cancel(); finish(freshCachedLocation()) }, SHARE_FIX_TIMEOUT_MS)
+        val finishWithCache = {
+            val cached = freshCachedLocation()
+            // 캐시가 대략적 위치였거나 지금 권한이 대략적 위치뿐이면 대략적 위치로 본다.
+            finish(cached, cached != null && lastKnownPrecise && precise)
+        }
+        handler.postDelayed({ cts.cancel(); finishWithCache() }, SHARE_FIX_TIMEOUT_MS)
         try {
-            fusedLocationClient.getCurrentLocation(Priority.PRIORITY_HIGH_ACCURACY, cts.token)
-                .addOnSuccessListener { location -> finish(location ?: freshCachedLocation()) }
-                .addOnFailureListener { finish(freshCachedLocation()) }
+            fusedLocationClient.getCurrentLocation(locationPriority(precise), cts.token)
+                .addOnSuccessListener { location -> if (location != null) finish(location, precise) else finishWithCache() }
+                .addOnFailureListener { finishWithCache() }
         } catch (e: SecurityException) {
-            finish(null)
+            finish(null, false)
         }
     }
 
@@ -786,16 +818,15 @@ class MainActivity : AppCompatActivity() {
         }
         builder.setMessage("$reason\n\n대신 지도에서 고른 위치(화면 중앙)를 보낼 수 있습니다. 이 경우 \"현재 위치\"가 아니라 \"지도에서 고른 위치\"로 표시됩니다.")
             .setPositiveButton("지도에서 고른 위치 공유") { _, _ ->
-                startShareChooser("지도에서 고른 위치입니다:", center.latitude, center.longitude)
+                startShareChooser(ShareKind.MAP_PICKED, center.latitude, center.longitude)
             }
             .show()
     }
 
-    private fun startShareChooser(intro: String, lat: Double, lng: Double) {
-        val mapLink = "https://map.kakao.com/link/map/" + String.format(java.util.Locale.US, "%.6f,%.6f", lat, lng)
+    private fun startShareChooser(kind: ShareKind, lat: Double, lng: Double) {
         val send = Intent(Intent.ACTION_SEND).apply {
             type = "text/plain"
-            putExtra(Intent.EXTRA_TEXT, "$intro\n$mapLink")
+            putExtra(Intent.EXTRA_TEXT, PlaceText.shareText(kind, lat, lng))
         }
         try {
             startActivity(Intent.createChooser(send, "위치 공유"))
@@ -804,42 +835,54 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * 위치 권한이 하나도 없을 때만 묻는다(Android 12+ 권한 창에서 정확/대략을 고를 수 있다).
+     * 대략적 위치만 허용된 상태면 정확한 위치를 다시 조르지 않고, 더 정확해질 수 있다는 안내만 한 번 한다(#11).
+     */
     private fun checkAndRequestPermissions() {
-        val permissions = arrayOf(
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION
+        if (hasFineLocation()) return
+        if (hasCoarseLocation()) {
+            showPreciseLocationHintOnce()
+            return
+        }
+        requestLocationPermissions()
+    }
+
+    private fun requestLocationPermissions() {
+        ActivityCompat.requestPermissions(
+            this,
+            arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION),
+            PERMISSION_REQUEST_CODE
         )
+    }
 
-        val listPermissionsNeeded = ArrayList<String>()
-        for (permission in permissions) {
-            if (ActivityCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
-                listPermissionsNeeded.add(permission)
-            }
+    /**
+     * 대략적 위치만 허용됐을 때 정확한 위치를 켜면 더 정확하다는 짧은 안내. 설치 후 한 번만 보인다.
+     * 표시 여부는 백업에서 빠지는 noBackupFilesDir 의 빈 표시 파일로만 기억한다(기기 밖으로 나가지 않음).
+     */
+    private fun showPreciseLocationHintOnce() {
+        val marker = File(noBackupFilesDir, PRECISE_HINT_MARKER)
+        if (marker.exists()) return
+        try {
+            marker.createNewFile()
+        } catch (e: IOException) {
+            // 기억하지 못하면 다음 실행 때 한 번 더 보일 뿐이다.
         }
-
-        if (listPermissionsNeeded.isNotEmpty()) {
-            ActivityCompat.requestPermissions(
-                this,
-                listPermissionsNeeded.toTypedArray(),
-                PERMISSION_REQUEST_CODE
-            )
-        }
+        Toast.makeText(this, "대략적인 위치로 표시합니다. 설정에서 「정확한 위치」를 켜면 더 정확해요.", Toast.LENGTH_LONG).show()
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == PERMISSION_REQUEST_CODE) {
-            var allGranted = true
-            for (result in grantResults) {
-                if (result != PackageManager.PERMISSION_GRANTED) {
-                    allGranted = false
-                }
-            }
-            if (allGranted) {
+        if (requestCode != PERMISSION_REQUEST_CODE) return
+        when {
+            hasFineLocation() -> moveToCurrentLocation()
+            hasCoarseLocation() -> {
+                // 대략적 위치만 허용: 거부가 아니다. 대략적 현재 위치로 옮기고 안내는 한 번만.
                 moveToCurrentLocation()
-            } else {
-                Toast.makeText(this, "필요한 권한이 거부되어 일부 기능이 제한됩니다.", Toast.LENGTH_SHORT).show()
+                showPreciseLocationHintOnce()
             }
+            grantResults.isEmpty() -> Unit // 요청이 중간에 끊김(화면 재생성 등) — 거부로 보지 않는다
+            else -> Toast.makeText(this, "위치 권한이 거부되어 현재 위치 표시와 위치 공유가 제한됩니다.", Toast.LENGTH_SHORT).show()
         }
     }
 }
