@@ -13,9 +13,9 @@ android {
         applicationId = "com.sgshs.sharepoi"
         minSdk = 26
         targetSdk = 36
-        // 1.0.2: 위치 공유를 공유 시트로(전화번호 입력란 제거)·현재 위치 미확보 시 잘못된 좌표 전송 방지. versionCode 8
-        versionCode = 8
-        versionName = "1.0.2"
+        // 1.0.9: 안정화 묶음(#8 #11 #13 #15 #29 #30 #32). 버전 정책(맨 뒤 = 빌드 번호 = versionCode). versionCode 9
+        versionCode = 9
+        versionName = "1.0.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
