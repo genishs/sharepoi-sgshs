@@ -91,6 +91,30 @@ class PlaceTextTest {
         assertFalse(text.contains("현재"))
     }
 
+    // --- 공공기관·주유소 안내 줄·전화번호(#18 #20) ---
+
+    @Test
+    fun detailAppendsNoteLineWhenGiven() {
+        val text = PlaceText.placeDetail("도로 1", "", "02-1234-5678", "공공기관입니다. 화장실을 쓸 수 있는지는 현장에서 확인해 주세요.")
+        assertEquals("📍 주소: 도로 1\n📞 전화: 02-1234-5678\nℹ️ 공공기관입니다. 화장실을 쓸 수 있는지는 현장에서 확인해 주세요.", text)
+    }
+
+    @Test
+    fun detailWithoutNoteIsUnchanged() {
+        val expected = "📍 주소: 도로 1\n📞 전화: ${PlaceText.NO_PHONE}"
+        assertEquals(expected, PlaceText.placeDetail("도로 1", "", ""))
+        assertEquals(expected, PlaceText.placeDetail("도로 1", "", "", ""))
+        assertEquals(expected, PlaceText.placeDetail("도로 1", "", "null", "null"))
+    }
+
+    @Test
+    fun cleanPhoneDropsNullAndBlank() {
+        assertEquals("", PlaceText.cleanPhone(null))
+        assertEquals("", PlaceText.cleanPhone("  "))
+        assertEquals("", PlaceText.cleanPhone("null"))
+        assertEquals("02-1234-5678", PlaceText.cleanPhone(" 02-1234-5678 "))
+    }
+
     @Test
     fun linkUsesDotDecimalRegardlessOfLocale() {
         val saved = Locale.getDefault()

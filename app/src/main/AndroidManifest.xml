@@ -15,7 +15,10 @@
 
         <activity
             android:name=".MainActivity"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize"
             android:exported="true">
+            <!-- 회전·창 크기 변경 때 화면을 다시 만들지 않는다: 지도 SDK 재초기화를 막고 진행 중 검색·떠 있던
+                 대화상자를 지킨다(#18). 레이아웃은 가로·세로 한 벌이고, 하단 영역 인셋은 리스너가 다시 적용한다. -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />

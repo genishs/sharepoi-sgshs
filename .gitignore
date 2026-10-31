@@ -25,3 +25,6 @@ captures/
 *.keystore
 *.pass
 secrets.properties
+
+# Android Studio 프로젝트 설정 전체(장비마다 달라 추적하지 않는다)
+.idea/
