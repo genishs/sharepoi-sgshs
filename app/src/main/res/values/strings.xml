@@ -1,3 +1,7 @@
 <resources>
     <string name="app_name">내주변 위치찾기</string>
+    <!-- 글자 대신 기호만 있는 버튼의 화면 읽기 이름(#20) -->
+    <string name="cd_zoom_in">지도 확대</string>
+    <string name="cd_zoom_out">지도 축소</string>
+    <string name="cd_my_location">내 위치로 이동</string>
 </resources>
