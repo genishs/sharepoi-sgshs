@@ -135,5 +135,17 @@ class AppDialog : DialogFragment() {
         }
 
         fun isShowing(fm: FragmentManager, tag: String): Boolean = fm.findFragmentByTag(tag) != null
+
+        /**
+         * [tag] 대화상자를 지금 바로 없앤다(대기 중인 제거 트랜잭션까지 반영). recreate() 직전에 부르면
+         * 눌린 대화상자가 상태로 저장돼 새 화면에 되살아나지 않는다. 상태가 이미 저장됐으면 아무것도 하지 않는다.
+         */
+        fun dismissNow(fm: FragmentManager, tag: String) {
+            if (fm.isStateSaved) return
+            fm.executePendingTransactions()
+            val fragment = fm.findFragmentByTag(tag) ?: return
+            if (fragment is DialogFragment) fragment.dismissNow()
+            fm.findFragmentByTag(tag)?.let { fm.beginTransaction().remove(it).commitNow() }
+        }
     }
 }

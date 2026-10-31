@@ -212,7 +212,13 @@ class MainActivity : AppCompatActivity() {
         }, object : KakaoMapReadyCallback() {
             override fun onMapReady(map: KakaoMap) {
                 kakaoMap = map
+                mapFailed = false
                 markerStyles.clear()
+                // 지도가 떴으면 앞서 남은 지도 오류 안내는 맞지 않으므로 닫는다.
+                if (!supportFragmentManager.isStateSaved) {
+                    (supportFragmentManager.findFragmentByTag(DLG_MAP_ERROR) as? androidx.fragment.app.DialogFragment)
+                        ?.dismissAllowingStateLoss()
+                }
                 moveToCurrentLocation()
 
                 // 검색 핀(화장실·편의시설)을 누르면 상세를 띄운다.
@@ -805,7 +811,12 @@ class MainActivity : AppCompatActivity() {
                 clipboard.setPrimaryClip(ClipData.newPlainText("지도 인증 오류", text))
                 Toast.makeText(this, "복사됨", Toast.LENGTH_SHORT).show()
             }
-            AppDialog.Action.RETRY_MAP -> recreate()
+            AppDialog.Action.RETRY_MAP -> {
+                // 눌린 지도 오류 대화상자가 새 화면에 복원되면 새 onMapError 가 안내를 건너뛰고, 지도가 떠도
+                // 옛 안내가 남는다. 다시 만들기 전에 바로 없앤다(PR #38 QA).
+                AppDialog.dismissNow(supportFragmentManager, DLG_MAP_ERROR)
+                recreate()
+            }
             AppDialog.Action.RETRY_SEARCH -> SearchCatalog.Request.fromKey(payload.getString(P_SEARCH))?.let { startSearch(it) }
             AppDialog.Action.PICK_CATEGORY ->
                 SearchCatalog.placeCategories.getOrNull(which)?.let { startSearch(SearchCatalog.Request.Category(it)) }
