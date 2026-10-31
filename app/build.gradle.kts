@@ -69,14 +69,17 @@ android {
 
 dependencies {
     implementation("com.kakao.maps.open:android:2.14.1")
-    implementation("com.google.android.gms:play-services-location:21.2.0")
+    implementation("com.google.android.gms:play-services-location:21.3.0")
 
-    implementation("androidx.core:core-ktx:1.12.0")
-    implementation("androidx.appcompat:appcompat:1.6.1")
-    implementation("androidx.constraintlayout:constraintlayout:2.1.4")
-    // 공유 위치 확인을 회전 너머로 잇는 ViewModel·LiveData(#29). appcompat 1.6.1 이 이미 끌어오는 버전과 같다.
-    implementation("androidx.lifecycle:lifecycle-viewmodel:2.5.1")
-    implementation("androidx.lifecycle:lifecycle-livedata-core:2.5.1")
+    implementation("androidx.core:core-ktx:1.17.0")
+    implementation("androidx.appcompat:appcompat:1.7.1")
+    implementation("androidx.fragment:fragment-ktx:1.8.9")
+    implementation("androidx.constraintlayout:constraintlayout:2.2.1")
+    // ViewModel·LiveData(공유 위치 확인, #29)와 lifecycleScope(검색, #18). 한 버전으로 묶는다.
+    val lifecycleVersion = "2.9.4"
+    implementation("androidx.lifecycle:lifecycle-viewmodel-ktx:$lifecycleVersion")
+    implementation("androidx.lifecycle:lifecycle-livedata-ktx:$lifecycleVersion")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:$lifecycleVersion")
 
     testImplementation("junit:junit:4.13.2")
 }
