@@ -26,10 +26,13 @@ class LocationShareViewModel(application: Application) : AndroidViewModel(applic
     /** 실제로 얻은 위치 한 건. [precise]: 정확한 위치 권한으로 얻었는지(대략적 위치면 false) */
     class Fix(val location: Location, val precise: Boolean)
 
-    /** 공유용 위치 확인 결과. 화면이 받으면 [consumeShareResult] 로 지운다. */
-    sealed class ShareResult {
-        class Ready(val kind: ShareKind, val latitude: Double, val longitude: Double) : ShareResult()
-        object NoFix : ShareResult()
+    /**
+     * 공유용 위치 확인 결과. 화면이 받으면 [consumeShareResult] 로 지운다.
+     * [createdAtMs](elapsedRealtime)로 나이를 재서, 오래된 결과는 화면이 버린다(#18, [SearchCatalog.isShareResultFresh]).
+     */
+    sealed class ShareResult(val createdAtMs: Long) {
+        class Ready(val kind: ShareKind, val latitude: Double, val longitude: Double, createdAtMs: Long) : ShareResult(createdAtMs)
+        class NoFix(createdAtMs: Long) : ShareResult(createdAtMs)
     }
 
     private val fusedLocationClient = LocationServices.getFusedLocationProviderClient(application)
@@ -79,12 +82,13 @@ class LocationShareViewModel(application: Application) : AndroidViewModel(applic
             handler.removeCallbacksAndMessages(null)
             cancellation = null
             _sharing.value = false
+            val now = SystemClock.elapsedRealtime()
             _shareResult.value = if (location != null) {
                 rememberFix(location, fixPrecise)
                 val kind = if (fixPrecise) ShareKind.CURRENT_PRECISE else ShareKind.CURRENT_APPROXIMATE
-                ShareResult.Ready(kind, location.latitude, location.longitude)
+                ShareResult.Ready(kind, location.latitude, location.longitude, now)
             } else {
-                ShareResult.NoFix
+                ShareResult.NoFix(now)
             }
         }
         val finishWithCache = {

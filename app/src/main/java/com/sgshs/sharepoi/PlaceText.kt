@@ -37,11 +37,19 @@ object PlaceText {
         return if (lines.isEmpty()) NO_ADDRESS else lines.joinToString("\n")
     }
 
-    /** 장소 상세 대화상자 본문: 주소(도로명·지번)와 전화번호. */
-    fun placeDetail(roadAddress: String?, jibunAddress: String?, phone: String?): String {
+    /**
+     * 장소 상세 대화상자 본문: 주소(도로명·지번)와 전화번호. [note] 가 있으면 끝에 한 줄 덧붙인다
+     * (화장실 검색에 섞인 공공기관·주유소가 화장실 자체로 오인되지 않게, #18).
+     */
+    fun placeDetail(roadAddress: String?, jibunAddress: String?, phone: String?, note: String? = null): String {
         val phoneText = clean(phone).ifEmpty { NO_PHONE }
-        return "📍 주소: ${addressLines(roadAddress, jibunAddress)}\n📞 전화: $phoneText"
+        val base = "📍 주소: ${addressLines(roadAddress, jibunAddress)}\n📞 전화: $phoneText"
+        val noteText = clean(note)
+        return if (noteText.isEmpty()) base else "$base\nℹ️ $noteText"
     }
+
+    /** 전화 걸기(다이얼)에 쓸 번호. 비었거나 JSON null 이면 빈 문자열. */
+    fun cleanPhone(phone: String?): String = clean(phone)
 
     private fun clean(value: String?): String {
         val trimmed = value?.trim().orEmpty()

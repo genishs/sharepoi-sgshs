@@ -9,27 +9,35 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Paint
 import android.location.Location
 import android.location.LocationManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import android.util.Base64
 import android.util.Log
 import android.widget.Button
-import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.location.LocationManagerCompat
+import androidx.core.os.bundleOf
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.withStarted
+import com.google.android.gms.common.api.ResolvableApiException
 import com.google.android.gms.location.FusedLocationProviderClient
+import com.google.android.gms.location.LocationRequest
 import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.LocationSettingsRequest
 import com.google.android.gms.location.Priority
 import com.google.android.gms.tasks.CancellationTokenSource
 import com.kakao.vectormap.KakaoMap
@@ -40,17 +48,19 @@ import com.kakao.vectormap.MapLifeCycleCallback
 import com.kakao.vectormap.MapView
 import com.kakao.vectormap.camera.CameraUpdateFactory
 import com.kakao.vectormap.label.Label
+import com.kakao.vectormap.label.LabelLayer
 import com.kakao.vectormap.label.LabelLayerOptions
 import com.kakao.vectormap.label.LabelOptions
 import com.kakao.vectormap.label.LabelStyle
 import com.kakao.vectormap.label.LabelStyles
 import com.kakao.vectormap.LatLng
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
-import java.net.HttpURLConnection
-import java.net.URL
-import java.net.URLEncoder
 import java.security.MessageDigest
 
 class MainActivity : AppCompatActivity() {
@@ -71,8 +81,20 @@ class MainActivity : AppCompatActivity() {
     /** 설치된 앱의 서명 키 해시. KA 헤더에 쓴다(검색 스레드에서도 읽으므로 lazy 는 동기화 기본값). */
     private val keyHash: String by lazy { computeKeyHash() }
 
-    /** 지도 오류 안내가 겹쳐 뜨지 않게 잡아 둔다. */
-    private var mapErrorDialog: AlertDialog? = null
+    /** 지도 SDK 가 오류를 냈는지. 이때는 「지도에서 고른 위치」를 권하지 않는다. */
+    private var mapFailed = false
+
+    /** 진행 중인 주변 검색. 끝나기 전에 다시 누르면 새 요청을 보내지 않는다(#18). */
+    private var searchJob: Job? = null
+
+    /** 검색 핀 모양(아이콘·색별). 지도마다 한 번만 등록한다. */
+    private val markerStyles = HashMap<String, LabelStyles>()
+
+    /** 🎯 에서 「위치 켜기」 시스템 창(#18). 켜면 바로 현재 위치를 다시 찾는다. */
+    private val enableLocationLauncher =
+        registerForActivityResult(ActivityResultContracts.StartIntentSenderForResult()) { result ->
+            if (result.resultCode == RESULT_OK) moveToCurrentLocation(LocateTrigger.USER)
+        }
 
     /** 권한·위치 설정 화면을 열었으면 돌아왔을 때 현재 위치를 다시 찾는다(#30). */
     private var locateOnResume = false
@@ -90,27 +112,27 @@ class MainActivity : AppCompatActivity() {
     private companion object {
         const val TAG = "MainActivity"
 
-        /** 카카오 Local API 연결·읽기 시간 제한(각각) */
-        const val HTTP_TIMEOUT_MS = 10_000
+        /** 검색 핀을 올리는 레이어. 새 검색 결과가 오면 비우고 다시 채운다(#18). */
+        const val SEARCH_LAYER = "searchLayer"
 
-        /** 한도 초과 판별용으로 읽는 오류 응답 본문 최대 길이 */
-        const val ERROR_BODY_LIMIT = 4_096
+        // 대화상자 태그(같은 태그는 하나만 뜬다)
+        const val DLG_PLACE = "place_detail"
+        const val DLG_LOCATION = "location_guide"
+        const val DLG_MAP_ERROR = "map_error"
+        const val DLG_SEARCH_FAILED = "search_failed"
+        const val DLG_CATEGORY = "category_picker"
+        const val DLG_NO_FIX = "no_fix"
+
+        // 대화상자 결과에 실어 보내는 값
+        const val P_LAT = "lat"
+        const val P_LNG = "lng"
+        const val P_PHONE = "phone"
+        const val P_TEXT = "text"
+        const val P_SEARCH = "search"
 
         /** 「정확한 위치를 켜면 더 정확해요」 안내를 이미 보였다는 표시 파일(noBackupFilesDir) */
         const val PRECISE_HINT_MARKER = "precise_location_hint_shown"
     }
-
-    // 주변 편의시설 카테고리 (카카오 category_group_code): (라벨, 코드, 이모지)
-    private val placeCategories = listOf(
-        Triple("편의점", "CS2", "🏪"),
-        Triple("카페", "CE7", "☕"),
-        Triple("음식점", "FD6", "🍚"),
-        Triple("주차장", "PK6", "🅿️"),
-        Triple("약국", "PM9", "💊"),
-        Triple("은행", "BK9", "🏦"),
-        Triple("지하철역", "SW8", "🚇"),
-        Triple("병원", "HP8", "🏥")
-    )
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -160,13 +182,21 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        // 대화상자(AppDialog) 버튼 결과. 화면이 다시 만들어져도 새 화면이 받는다.
+        supportFragmentManager.setFragmentResultListener(AppDialog.REQUEST_KEY, this) { _, bundle ->
+            val action = bundle.getString(AppDialog.RESULT_ACTION)
+                ?.let { name -> AppDialog.Action.entries.firstOrNull { it.name == name } } ?: return@setFragmentResultListener
+            onDialogAction(action, bundle.getBundle(AppDialog.RESULT_PAYLOAD) ?: Bundle(), bundle.getInt(AppDialog.RESULT_WHICH, -1))
+        }
+
         mapView = findViewById(R.id.mapView)
         mapView.start(object : MapLifeCycleCallback() {
             override fun onMapDestroy() {}
 
             override fun onMapError(error: Exception?) {
+                mapFailed = true
                 if (isFinishing || isDestroyed) return
-                if (mapErrorDialog?.isShowing == true) return
+                if (AppDialog.isShowing(supportFragmentManager, DLG_MAP_ERROR)) return
                 if (BuildConfig.DEBUG) {
                     // 개발용: 패키지명·키 해시·서명자·스택을 보여 카카오 콘솔 등록값과 맞춰 볼 수 있게 한다.
                     val diagnosticText = buildAuthDiagnosticText(error)
@@ -182,35 +212,14 @@ class MainActivity : AppCompatActivity() {
         }, object : KakaoMapReadyCallback() {
             override fun onMapReady(map: KakaoMap) {
                 kakaoMap = map
+                markerStyles.clear()
                 moveToCurrentLocation()
 
-                // Label Click Listener for Restroom Markers
+                // 검색 핀(화장실·편의시설)을 누르면 상세를 띄운다.
                 map.setOnLabelClickListener { _, _, label ->
                     val item = label.tag as? JSONObject
                     if (item != null) {
-                        val icon = item.optString("display_icon", "📍")
-                        val name = item.optString("place_name", "장소")
-                        // 화장실 4소스·편의시설 8개 카테고리 결과가 모두 이 한 경로로 상세를 띄운다(#8).
-                        // 도로명 주소(road_address_name) 첫 줄 + 지번 주소(address_name) 둘째 줄, 빈 쪽은 숨김.
-                        val detail = PlaceText.placeDetail(
-                            item.optString("road_address_name", ""),
-                            item.optString("address_name", ""),
-                            item.optString("phone", "")
-                        )
-                        val lat = item.optString("y", "37.5667").toDouble()
-                        val lng = item.optString("x", "126.8273").toDouble()
-
-                        AlertDialog.Builder(this@MainActivity)
-                            .setTitle("$icon $name")
-                            .setMessage(detail)
-                            .setPositiveButton("📷 로드뷰 보기") { _, _ ->
-                                val roadviewUrl = "https://map.kakao.com/link/roadview/$lat,$lng"
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(roadviewUrl))
-                                startActivity(intent)
-                            }
-                            .setNegativeButton("닫기", null)
-                            .show()
-
+                        showPlaceDetail(item)
                         true
                     } else {
                         false
@@ -237,9 +246,9 @@ class MainActivity : AppCompatActivity() {
             moveToCurrentLocation(LocateTrigger.USER)
         }
 
-        // Restroom Search Listener (4-in-1 multi-source search)
+        // 화장실 통합 검색(화장실 키워드 2종 + 공공기관·주유소)
         btnRestroom.setOnClickListener {
-            fetchNearbyRestroomsMultiSource()
+            startSearch(SearchCatalog.Request.Restroom)
         }
 
         // Nearby places (편의시설) search: pick a category, then search
@@ -247,15 +256,12 @@ class MainActivity : AppCompatActivity() {
             showPlaceCategoryDialog()
         }
 
-        // Roadview Listener with Magoknaru fallback
+        // 지도 중심(지도가 없으면 기본 좌표)의 로드뷰
         btnRoadview.setOnClickListener {
             val cameraPos = kakaoMap?.cameraPosition?.position
             val lat = cameraPos?.latitude ?: DEFAULT_LAT
             val lng = cameraPos?.longitude ?: DEFAULT_LNG
-
-            val roadviewUrl = "https://map.kakao.com/link/roadview/$lat,$lng"
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(roadviewUrl))
-            startActivity(intent)
+            openRoadview(lat, lng)
         }
 
         btnShare.setOnClickListener {
@@ -350,36 +356,66 @@ class MainActivity : AppCompatActivity() {
     private fun showLocationPermissionGuide() {
         val canAsk = ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.ACCESS_COARSE_LOCATION) ||
             ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.ACCESS_FINE_LOCATION)
-        val builder = AlertDialog.Builder(this)
-            .setTitle("위치 권한이 필요합니다")
-            .setNegativeButton("닫기", null)
         if (canAsk) {
-            builder.setMessage("위치 권한이 없어 현재 위치를 표시할 수 없습니다.\n내 위치를 보려면 위치 권한을 허용해 주세요.")
-                .setPositiveButton("권한 허용") { _, _ -> requestLocationPermissions() }
+            AppDialog.show(
+                supportFragmentManager, DLG_LOCATION, "위치 권한이 필요합니다",
+                "위치 권한이 없어 현재 위치를 표시할 수 없습니다.\n내 위치를 보려면 위치 권한을 허용해 주세요.",
+                positive = AppDialog.Button("권한 허용", AppDialog.Action.REQUEST_PERMISSION),
+                negative = AppDialog.Button("닫기")
+            )
         } else {
-            builder.setMessage("위치 권한이 없어 현재 위치를 표시할 수 없습니다.\n설정 > 권한 > 위치에서 「앱 사용 중에만 허용」을 골라 주세요.")
-                .setPositiveButton("설정 열기") { _, _ ->
-                    openSettings(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
-                }
+            AppDialog.show(
+                supportFragmentManager, DLG_LOCATION, "위치 권한이 필요합니다",
+                "위치 권한이 없어 현재 위치를 표시할 수 없습니다.\n설정 > 권한 > 위치에서 「앱 사용 중에만 허용」을 골라 주세요.",
+                positive = AppDialog.Button("설정 열기", AppDialog.Action.OPEN_APP_SETTINGS),
+                negative = AppDialog.Button("닫기")
+            )
         }
-        builder.show()
     }
 
-    /** 🎯: 권한은 있는데 위치를 얻지 못했을 때. 기기 위치가 꺼져 있으면 위치 설정을, 아니면 다시 시도를 권한다. */
+    /** 🎯: 권한은 있는데 위치를 얻지 못했을 때. 기기 위치가 꺼져 있으면 위치 켜기를, 아니면 다시 시도를 권한다. */
     private fun showLocationUnavailableGuide() {
         val locationManager = getSystemService(Context.LOCATION_SERVICE) as? LocationManager
         val locationOn = locationManager == null || LocationManagerCompat.isLocationEnabled(locationManager)
-        val builder = AlertDialog.Builder(this)
-            .setTitle("현재 위치를 확인할 수 없습니다")
-            .setNegativeButton("닫기", null)
         if (locationOn) {
-            builder.setMessage("현재 위치를 확인하지 못했습니다.\n실내·지하에서는 시간이 걸릴 수 있습니다. 잠시 후 다시 시도해 주세요.")
-                .setPositiveButton("다시 시도") { _, _ -> moveToCurrentLocation(LocateTrigger.USER) }
+            AppDialog.show(
+                supportFragmentManager, DLG_LOCATION, "현재 위치를 확인할 수 없습니다",
+                "현재 위치를 확인하지 못했습니다.\n실내·지하에서는 시간이 걸릴 수 있습니다. 잠시 후 다시 시도해 주세요.",
+                positive = AppDialog.Button("다시 시도", AppDialog.Action.RETRY_LOCATE),
+                negative = AppDialog.Button("닫기")
+            )
         } else {
-            builder.setMessage("기기의 위치가 꺼져 있어 현재 위치를 확인할 수 없습니다.\n위치 설정에서 위치를 켜 주세요.")
-                .setPositiveButton("위치 설정 열기") { _, _ -> openSettings(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)) }
+            AppDialog.show(
+                supportFragmentManager, DLG_LOCATION, "현재 위치를 확인할 수 없습니다",
+                "기기의 위치가 꺼져 있어 현재 위치를 확인할 수 없습니다.\n위치를 켜 주세요.",
+                positive = AppDialog.Button("위치 켜기", AppDialog.Action.ENABLE_LOCATION),
+                negative = AppDialog.Button("닫기")
+            )
         }
-        builder.show()
+    }
+
+    /**
+     * 기기 위치 켜기(#18). Play 서비스의 「위치 켜기」 시스템 창을 먼저 띄우고, 띄울 수 없으면 위치 설정 화면을 연다.
+     * 권한 목록은 그대로다(위치 설정 확인은 권한이 필요 없다).
+     */
+    private fun requestEnableLocation() {
+        val request = LocationSettingsRequest.Builder()
+            .addLocationRequest(LocationRequest.Builder(Priority.PRIORITY_HIGH_ACCURACY, 10_000L).build())
+            .setAlwaysShow(true)
+            .build()
+        LocationServices.getSettingsClient(this).checkLocationSettings(request)
+            .addOnSuccessListener(this) { moveToCurrentLocation(LocateTrigger.USER) }
+            .addOnFailureListener(this) { e ->
+                if (e is ResolvableApiException) {
+                    try {
+                        enableLocationLauncher.launch(IntentSenderRequest.Builder(e.resolution).build())
+                        return@addOnFailureListener
+                    } catch (ignored: Exception) {
+                        // 아래에서 위치 설정 화면으로
+                    }
+                }
+                openSettings(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+            }
     }
 
     private fun openSettings(intent: Intent) {
@@ -416,7 +452,7 @@ class MainActivity : AppCompatActivity() {
         if (label == null) {
             val bitmap = getBitmapFromVector(this, R.drawable.current_location_marker)
             val styles = labelManager.addLabelStyles(
-                LabelStyles.from(LabelStyle.from(bitmap).setAnchorPoint(0.5f, 0.5f))
+                LabelStyles.from(LabelStyle.from(bitmap).setAnchorPoint(0.5f, 0.5f).setApplyDpScale(false))
             )
             val options = LabelOptions.from("current_loc_label", position).setStyles(styles)
             currentLocationLabel = layer?.addLabel(options)
@@ -526,28 +562,17 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 지도 인증 오류 진단 다이얼로그(디버그 빌드 전용). 본문은 선택/복사 가능하며, "복사" 버튼으로 클립보드에 전체 복사한다.
+     * 지도 인증 오류 진단 대화상자(디버그 빌드 전용). 본문은 길게 눌러 고를 수 있고, 「복사」 버튼으로 전체를 복사한다.
      */
     private fun showAuthDiagnosticDialog(diagnosticText: String) {
-        val messageView = TextView(this@MainActivity).apply {
-            text = diagnosticText
-            setTextIsSelectable(true)
-            val paddingPx = (16 * resources.displayMetrics.density).toInt()
-            setPadding(paddingPx, paddingPx, paddingPx, paddingPx)
-        }
-
-        mapErrorDialog = AlertDialog.Builder(this@MainActivity)
-            .setTitle("지도 인증 오류")
-            .setView(messageView)
-            .setPositiveButton("복사") { _, _ ->
-                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-                val clip = ClipData.newPlainText("지도 인증 오류", diagnosticText)
-                clipboard.setPrimaryClip(clip)
-                Toast.makeText(this@MainActivity, "복사됨", Toast.LENGTH_SHORT).show()
-            }
-            .setNeutralButton("다시 시도") { _, _ -> recreate() }
-            .setNegativeButton("닫기", null)
-            .show()
+        AppDialog.show(
+            supportFragmentManager, DLG_MAP_ERROR, "지도 인증 오류", diagnosticText,
+            positive = AppDialog.Button("복사", AppDialog.Action.COPY_DIAGNOSTIC),
+            neutral = AppDialog.Button("다시 시도", AppDialog.Action.RETRY_MAP),
+            negative = AppDialog.Button("닫기"),
+            payload = bundleOf(P_TEXT to diagnosticText),
+            selectable = true
+        )
     }
 
     /**
@@ -555,12 +580,11 @@ class MainActivity : AppCompatActivity() {
      * 다시 시도는 화면을 새로 만들어 지도 SDK 를 처음부터 다시 시작한다.
      */
     private fun showMapErrorDialog(kind: FailureKind) {
-        mapErrorDialog = AlertDialog.Builder(this)
-            .setTitle("지도를 불러오지 못했습니다")
-            .setMessage(SearchErrors.mapFailureMessage(kind))
-            .setPositiveButton("다시 시도") { _, _ -> recreate() }
-            .setNegativeButton("닫기", null)
-            .show()
+        AppDialog.show(
+            supportFragmentManager, DLG_MAP_ERROR, "지도를 불러오지 못했습니다", SearchErrors.mapFailureMessage(kind),
+            positive = AppDialog.Button("다시 시도", AppDialog.Action.RETRY_MAP),
+            negative = AppDialog.Button("닫기")
+        )
     }
 
     /**
@@ -577,141 +601,56 @@ class MainActivity : AppCompatActivity() {
         return "sdk/$sdkVersion os/$osVersion origin/$origin android_pkg/$pkgName"
     }
 
-    private fun fetchNearbyRestroomsMultiSource() {
+    /**
+     * 지도 중심 주변을 검색한다(#18). 앞 검색이 끝나기 전에 다시 누르면(연타) 새 요청을 보내지 않는다.
+     * 요청은 화면 밖([LocalSearchClient], IO 스레드)에서 돌고, 화면이 닫히면 lifecycleScope 와 함께 취소되어
+     * 사라진 화면·지도에 닿지 않는다. 결과는 화면이 보일 때(STARTED) 보인다.
+     */
+    private fun startSearch(request: SearchCatalog.Request) {
+        if (searchJob?.isActive == true) {
+            Toast.makeText(this, "앞의 검색이 아직 진행 중입니다. 잠시만 기다려 주세요.", Toast.LENGTH_SHORT).show()
+            return
+        }
         val cameraPos = kakaoMap?.cameraPosition?.position
         val lat = cameraPos?.latitude ?: DEFAULT_LAT
         val lng = cameraPos?.longitude ?: DEFAULT_LNG
 
-        Toast.makeText(this, "지도 중심 주변 4가지 소스(공중/개방/관공서/주유소) 통합 검색 중...", Toast.LENGTH_SHORT).show()
-
-        Thread {
-            val allDocuments = ArrayList<JSONObject>()
-            val outcomes = ArrayList<RequestOutcome>()
-            try {
-                val seenIds = HashSet<String>()
-
-                val searchUrls = listOf(
-                    "https://dapi.kakao.com/v2/local/search/keyword.json?query=${URLEncoder.encode("공중화장실", "UTF-8")}&x=$lng&y=$lat&radius=2000&sort=distance",
-                    "https://dapi.kakao.com/v2/local/search/keyword.json?query=${URLEncoder.encode("개방화장실", "UTF-8")}&x=$lng&y=$lat&radius=2000&sort=distance",
-                    "https://dapi.kakao.com/v2/local/search/category.json?category_group_code=PO3&x=$lng&y=$lat&radius=2000&sort=distance",
-                    "https://dapi.kakao.com/v2/local/search/category.json?category_group_code=OL7&x=$lng&y=$lat&radius=2000&sort=distance"
-                )
-
-                val kaHeader = buildKaHeader()
-
-                for (urlString in searchUrls) {
-                    when (val response = requestLocal(urlString, kaHeader)) {
-                        is LocalResponse.Page -> {
-                            mergeDocuments(response.documents, seenIds, allDocuments, "🚽")
-                            outcomes.add(RequestOutcome.Ok(response.documents.size))
-                        }
-                        is LocalResponse.Error -> outcomes.add(response.failure)
-                    }
-                }
-            } catch (e: Exception) {
-                // 요청 밖에서 난 예상 못 한 오류도 「결과 없음」이 아니라 실패로 알린다.
-                if (BuildConfig.DEBUG) Log.w(TAG, "Restroom search failed", e)
-                outcomes.add(RequestOutcome.Failed(SearchErrors.classifyException(e)))
-            }
-
-            val summary = SearchErrors.summarize(outcomes, allDocuments.size)
-            runOnUiThread {
-                showSearchResult(summary, allDocuments, R.drawable.restroom_marker, "restroomLayer", "화장실") {
-                    fetchNearbyRestroomsMultiSource()
-                }
-            }
-        }.start()
-    }
-
-    /** 카카오 Local API 응답 한 번의 결과. */
-    private sealed class LocalResponse {
-        class Page(val documents: List<JSONObject>, val isEnd: Boolean) : LocalResponse()
-        class Error(val failure: RequestOutcome.Failed) : LocalResponse()
-    }
-
-    /**
-     * 카카오 Local API 에 GET 을 한 번 보낸다. 200 이면 장소 목록을, 그 밖의 응답·예외는 원인을 분류해 돌려준다.
-     * 연결·읽기 시간 제한을 두고, 연결은 항상 닫는다. (백그라운드 스레드에서 부른다)
-     */
-    private fun requestLocal(urlString: String, kaHeader: String): LocalResponse {
-        var conn: HttpURLConnection? = null
-        return try {
-            conn = (URL(urlString).openConnection() as HttpURLConnection).apply {
-                requestMethod = "GET"
-                connectTimeout = HTTP_TIMEOUT_MS
-                readTimeout = HTTP_TIMEOUT_MS
-                setRequestProperty("Authorization", "KakaoAK ${BuildConfig.KAKAO_MAP_API_KEY}")
-                setRequestProperty("KA", kaHeader)
-            }
-            val code = conn.responseCode
-            if (code == HttpURLConnection.HTTP_OK) {
-                val json = JSONObject(conn.inputStream.bufferedReader().use { it.readText() })
-                val docs = json.getJSONArray("documents")
-                val items = (0 until docs.length()).map { docs.getJSONObject(it) }
-                val meta = json.optJSONObject("meta")
-                LocalResponse.Page(items, meta == null || meta.optBoolean("is_end", true))
-            } else {
-                val kind = SearchErrors.classifyHttp(code, readErrorBody(conn))
-                if (BuildConfig.DEBUG) Log.w(TAG, "Local API HTTP $code -> $kind")
-                LocalResponse.Error(RequestOutcome.Failed(kind, code))
-            }
-        } catch (e: Exception) {
-            val kind = SearchErrors.classifyException(e)
-            if (BuildConfig.DEBUG) Log.w(TAG, "Local API request failed -> $kind", e)
-            LocalResponse.Error(RequestOutcome.Failed(kind))
-        } finally {
-            conn?.disconnect()
+        val searching = when (request) {
+            SearchCatalog.Request.Restroom -> "지도 중심 주변 화장실(공중·개방 화장실, 공공기관·주유소) 검색 중..."
+            is SearchCatalog.Request.Category -> "지도 중심 주변 ${request.label} 검색 중..."
         }
-    }
+        Toast.makeText(this, searching, Toast.LENGTH_SHORT).show()
 
-    /** 오류 응답 본문 앞부분(한도 초과 판별용). 읽지 못하면 null. */
-    private fun readErrorBody(conn: HttpURLConnection): String? = try {
-        conn.errorStream?.bufferedReader()?.use { reader ->
-            val sb = StringBuilder()
-            val buf = CharArray(512)
-            while (sb.length < ERROR_BODY_LIMIT) {
-                val n = reader.read(buf)
-                if (n < 0) break
-                sb.append(buf, 0, n)
-            }
-            sb.toString()
-        }
-    } catch (e: IOException) {
-        null
-    }
-
-    /** id(없으면 이름)로 중복을 걸러 [into] 에 더한다. */
-    private fun mergeDocuments(docs: List<JSONObject>, seenIds: MutableSet<String>, into: MutableList<JSONObject>, icon: String) {
-        for (item in docs) {
-            val id = item.optString("id", "")
-            val key = if (id.isNotEmpty()) id else item.optString("place_name", "")
-            if (seenIds.add(key)) {
-                item.put("display_icon", icon)
-                into.add(item)
-            }
+        val client = LocalSearchClient(BuildConfig.KAKAO_MAP_API_KEY, buildKaHeader())
+        searchJob = lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) { client.search(request, lat, lng) }
+            withStarted { showSearchResult(request, result) }
         }
     }
 
     /**
      * 검색 결론을 화면에 보인다. 모든 요청이 성공했는데 결과가 없을 때만 「주변에 없음」으로 안내하고,
      * 실패(네트워크·인증·한도·서비스 오류)는 원인별 안내와 다시 시도를 보인다.
+     * 새 결과(또는 결과 없음)가 오면 앞 검색의 핀을 지운다. 실패하면 앞 핀을 그대로 둔다.
      */
-    private fun showSearchResult(
-        summary: SearchSummary,
-        documents: List<JSONObject>,
-        markerDrawableId: Int,
-        layerId: String,
-        categoryLabel: String,
-        retry: () -> Unit
-    ) {
+    private fun showSearchResult(request: SearchCatalog.Request, result: LocalSearchClient.Result) {
         if (isFinishing || isDestroyed) return
-        when (summary) {
+        val categoryLabel = request.label
+        when (val summary = result.summary) {
             is SearchSummary.Failed ->
-                showSearchFailureDialog(SearchErrors.searchFailureMessage(summary.cause, categoryLabel), retry)
-            SearchSummary.NoResults ->
+                AppDialog.show(
+                    supportFragmentManager, DLG_SEARCH_FAILED, "검색하지 못했습니다",
+                    SearchErrors.searchFailureMessage(summary.cause, categoryLabel),
+                    positive = AppDialog.Button("다시 시도", AppDialog.Action.RETRY_SEARCH),
+                    negative = AppDialog.Button("닫기"),
+                    payload = bundleOf(P_SEARCH to request.key)
+                )
+            SearchSummary.NoResults -> {
+                clearSearchMarkers()
                 Toast.makeText(this, "주변 2km 이내에 검색된 ${categoryLabel} 정보가 없습니다.", Toast.LENGTH_SHORT).show()
+            }
             is SearchSummary.Found -> {
-                val shown = displayMarkers(documents, markerDrawableId, layerId)
+                val shown = displayMarkers(result.documents, SearchCatalog.markerColor(request))
                 if (shown == 0) {
                     Toast.makeText(this, "지도를 불러오지 못해 검색 결과를 표시할 수 없습니다.", Toast.LENGTH_LONG).show()
                     return
@@ -722,114 +661,166 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-    private fun showSearchFailureDialog(message: String, retry: () -> Unit) {
-        AlertDialog.Builder(this)
-            .setTitle("검색하지 못했습니다")
-            .setMessage(message)
-            .setPositiveButton("다시 시도") { _, _ -> retry() }
-            .setNegativeButton("닫기", null)
-            .show()
+    private fun searchLayer(create: Boolean): LabelLayer? {
+        val labelManager = kakaoMap?.labelManager ?: return null
+        return labelManager.getLayer(SEARCH_LAYER)
+            ?: if (create) labelManager.addLayer(LabelLayerOptions.from(SEARCH_LAYER).setZOrder(10000)) else null
     }
 
-    /** 장소 핀을 지도에 올린다. 올린 핀 수를 돌려준다(지도가 없으면 0). */
-    private fun displayMarkers(documents: List<JSONObject>, markerDrawableId: Int, layerId: String): Int {
+    /** 앞 검색의 핀을 모두 지운다. */
+    private fun clearSearchMarkers() {
+        searchLayer(create = false)?.removeAll()
+    }
+
+    /**
+     * 앞 검색의 핀을 지우고 장소 핀을 올린다. 핀은 장소 종류 아이콘(🚽·🏛️·⛽·☕ …)을 [color] 원 안에 그린다.
+     * 올린 핀 수를 돌려준다(지도가 없으면 0).
+     */
+    private fun displayMarkers(documents: List<JSONObject>, color: Int): Int {
         val map = kakaoMap ?: return 0
         val labelManager = map.labelManager ?: return 0
-
-        val layer = labelManager.getLayer(layerId)
-            ?: labelManager.addLayer(LabelLayerOptions.from(layerId).setZOrder(10000))
-            ?: return 0
-
-        val bitmap = getBitmapFromVector(this, markerDrawableId)
-        val styles = labelManager.addLabelStyles(
-            LabelStyles.from(LabelStyle.from(bitmap).setAnchorPoint(0.5f, 0.5f))
-        )
+        val layer = searchLayer(create = true) ?: return 0
+        layer.removeAll()
 
         var shown = 0
         documents.forEachIndexed { i, item ->
             val itemLat = item.optString("y").toDoubleOrNull()
             val itemLng = item.optString("x").toDoubleOrNull()
             if (itemLat == null || itemLng == null) return@forEachIndexed
-            val id = item.optString("id", "${layerId}_$i")
+            val id = item.optString("id", "item_$i")
+            val icon = item.optString(LocalSearchClient.KEY_ICON, "📍")
 
-            val position = LatLng.from(itemLat, itemLng)
-            // Attach item JSONObject as Tag
-            val options = LabelOptions.from("${layerId}_label_$id", position)
+            val styleKey = "marker_${Integer.toHexString(color)}_$icon"
+            val styles = markerStyles[styleKey]
+                ?: labelManager.addLabelStyles(
+                    LabelStyles.from(
+                        styleKey,
+                        LabelStyle.from(makeMarkerBitmap(icon, color)).setAnchorPoint(0.5f, 0.5f).setApplyDpScale(false)
+                    )
+                )?.also { markerStyles[styleKey] = it }
+                ?: return@forEachIndexed
+
+            // 장소 JSON 을 태그로 달아 두고, 핀을 누르면 상세에 쓴다.
+            val options = LabelOptions.from("${SEARCH_LAYER}_label_$id", LatLng.from(itemLat, itemLng))
                 .setStyles(styles)
                 .setTag(item)
-
             layer.addLabel(options)
             shown++
         }
         return shown
     }
 
+    /** 검색 핀 그림: dp 기준 지름의 원(테두리 흰색) 안에 장소 종류 아이콘. 밀도에 맞춰 px 로 그린다(#18). */
+    private fun makeMarkerBitmap(icon: String, color: Int): Bitmap {
+        val density = resources.displayMetrics.density
+        val size = SearchCatalog.dpToPx(SearchCatalog.MARKER_DP, density)
+        val stroke = SearchCatalog.dpToPx(2, density).toFloat()
+        val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        val radius = size / 2f
+        val fill = Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = 0xFFFFFFFF.toInt() }
+        canvas.drawCircle(radius, radius, radius, fill)
+        fill.color = color
+        canvas.drawCircle(radius, radius, radius - stroke, fill)
+        val text = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            textSize = size * 0.5f
+            textAlign = Paint.Align.CENTER
+        }
+        val baseline = radius - (text.descent() + text.ascent()) / 2f
+        canvas.drawText(icon, radius, baseline, text)
+        return bitmap
+    }
+
+    /** 검색 핀을 눌렀을 때의 상세: 주소(도로명·지번)·전화, 로드뷰·전화 걸기 버튼. */
+    private fun showPlaceDetail(item: JSONObject) {
+        val icon = item.optString(LocalSearchClient.KEY_ICON, "📍")
+        val name = item.optString("place_name", "장소")
+        val phone = PlaceText.cleanPhone(item.optString("phone", ""))
+        // 화장실 4소스·편의시설 8개 카테고리 결과가 모두 이 한 경로로 상세를 띄운다(#8).
+        // 도로명 주소(road_address_name) 첫 줄 + 지번 주소(address_name) 둘째 줄, 빈 쪽은 숨김.
+        val detail = PlaceText.placeDetail(
+            item.optString("road_address_name", ""),
+            item.optString("address_name", ""),
+            phone,
+            item.optString(LocalSearchClient.KEY_NOTE, "")
+        )
+        val lat = item.optString("y").toDoubleOrNull() ?: return
+        val lng = item.optString("x").toDoubleOrNull() ?: return
+
+        AppDialog.show(
+            supportFragmentManager, DLG_PLACE, "$icon $name", detail,
+            positive = AppDialog.Button("📷 로드뷰 보기", AppDialog.Action.ROADVIEW),
+            neutral = if (phone.isNotEmpty()) AppDialog.Button("📞 전화 걸기", AppDialog.Action.DIAL) else null,
+            negative = AppDialog.Button("닫기"),
+            payload = bundleOf(P_LAT to lat, P_LNG to lng, P_PHONE to phone)
+        )
+    }
+
+    /** 로드뷰 링크를 연다. 열 앱(브라우저 등)이 없으면 알리기만 한다(#18). */
+    private fun openRoadview(lat: Double, lng: Double) {
+        val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://map.kakao.com/link/roadview/$lat,$lng"))
+        try {
+            startActivity(intent)
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "로드뷰를 열 수 있는 앱(인터넷 브라우저)이 없습니다.", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    /** 장소 전화번호로 전화 앱의 다이얼 화면을 연다(바로 걸지 않는다 — 전화 권한이 필요 없다, #20). */
+    private fun openDialer(phone: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_DIAL, Uri.fromParts("tel", phone, null)))
+        } catch (e: ActivityNotFoundException) {
+            Toast.makeText(this, "전화를 걸 수 있는 앱이 없습니다.", Toast.LENGTH_SHORT).show()
+        }
+    }
+
     /**
-     * 주변 편의시설 카테고리 선택 다이얼로그. 선택하면 해당 카테고리를 검색한다.
+     * 주변 편의시설 카테고리 선택 대화상자. 선택하면 해당 카테고리를 검색한다.
      */
     private fun showPlaceCategoryDialog() {
-        val labels = placeCategories.map { "${it.third} ${it.first}" }.toTypedArray()
-        AlertDialog.Builder(this)
-            .setTitle("주변에서 찾을 편의시설을 선택하세요")
-            .setItems(labels) { _, which ->
-                val (label, code, icon) = placeCategories[which]
-                fetchNearbyByCategory(code, icon, label)
-            }
-            .setNegativeButton("취소", null)
-            .show()
+        val labels = SearchCatalog.placeCategories.map { "${it.icon} ${it.label}" }.toTypedArray()
+        AppDialog.show(
+            supportFragmentManager, DLG_CATEGORY, "주변에서 찾을 편의시설을 선택하세요",
+            negative = AppDialog.Button("취소"),
+            items = labels,
+            itemsAction = AppDialog.Action.PICK_CATEGORY
+        )
     }
 
-    /**
-     * 지도 중심 주변 2km 내에서 지정한 카카오 카테고리를 검색해 파란 핀으로 표시한다.
-     * category.json 은 페이지당 최대 15개라 최대 3페이지(45개)까지 누적한다.
-     */
-    private fun fetchNearbyByCategory(categoryCode: String, icon: String, categoryLabel: String) {
-        val cameraPos = kakaoMap?.cameraPosition?.position
-        val lat = cameraPos?.latitude ?: DEFAULT_LAT
-        val lng = cameraPos?.longitude ?: DEFAULT_LNG
-
-        Toast.makeText(this, "지도 중심 주변 ${categoryLabel} 검색 중...", Toast.LENGTH_SHORT).show()
-
-        Thread {
-            val allDocuments = ArrayList<JSONObject>()
-            val outcomes = ArrayList<RequestOutcome>()
-            try {
-                val seenIds = HashSet<String>()
-                val kaHeader = buildKaHeader()
-
-                for (page in 1..3) {
-                    val urlString = "https://dapi.kakao.com/v2/local/search/category.json?category_group_code=$categoryCode&x=$lng&y=$lat&radius=2000&sort=distance&page=$page&size=15"
-                    when (val response = requestLocal(urlString, kaHeader)) {
-                        is LocalResponse.Page -> {
-                            mergeDocuments(response.documents, seenIds, allDocuments, icon)
-                            outcomes.add(RequestOutcome.Ok(response.documents.size))
-                            if (response.isEnd) break
-                        }
-                        is LocalResponse.Error -> {
-                            // 다음 페이지는 시도하지 않는다. 앞 페이지 결과가 있으면 그것만 보이고 일부 누락을 알린다.
-                            outcomes.add(response.failure)
-                            break
-                        }
-                    }
-                }
-            } catch (e: Exception) {
-                if (BuildConfig.DEBUG) Log.w(TAG, "Category search failed", e)
-                outcomes.add(RequestOutcome.Failed(SearchErrors.classifyException(e)))
+    /** 대화상자 버튼 결과를 처리한다. 값은 대화상자에 실어 둔 [payload] 에서 읽는다. */
+    private fun onDialogAction(action: AppDialog.Action, payload: Bundle, which: Int) {
+        when (action) {
+            AppDialog.Action.NONE -> Unit
+            AppDialog.Action.ROADVIEW -> openRoadview(payload.getDouble(P_LAT), payload.getDouble(P_LNG))
+            AppDialog.Action.DIAL -> payload.getString(P_PHONE)?.takeIf { it.isNotEmpty() }?.let { openDialer(it) }
+            AppDialog.Action.REQUEST_PERMISSION -> requestLocationPermissions()
+            AppDialog.Action.OPEN_APP_SETTINGS ->
+                openSettings(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.fromParts("package", packageName, null)))
+            AppDialog.Action.RETRY_LOCATE -> moveToCurrentLocation(LocateTrigger.USER)
+            AppDialog.Action.ENABLE_LOCATION -> requestEnableLocation()
+            AppDialog.Action.COPY_DIAGNOSTIC -> {
+                val text = payload.getString(P_TEXT).orEmpty()
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("지도 인증 오류", text))
+                Toast.makeText(this, "복사됨", Toast.LENGTH_SHORT).show()
             }
-
-            val summary = SearchErrors.summarize(outcomes, allDocuments.size)
-            runOnUiThread {
-                showSearchResult(summary, allDocuments, R.drawable.place_marker, "placeLayer", categoryLabel) {
-                    fetchNearbyByCategory(categoryCode, icon, categoryLabel)
-                }
-            }
-        }.start()
+            AppDialog.Action.RETRY_MAP -> recreate()
+            AppDialog.Action.RETRY_SEARCH -> SearchCatalog.Request.fromKey(payload.getString(P_SEARCH))?.let { startSearch(it) }
+            AppDialog.Action.PICK_CATEGORY ->
+                SearchCatalog.placeCategories.getOrNull(which)?.let { startSearch(SearchCatalog.Request.Category(it)) }
+            AppDialog.Action.SHARE_MAP_PICKED -> shareMapCenter()
+        }
     }
 
+    /** 현재 위치 마커 등 도형 그림을 그 그림의 dp 크기(밀도에 맞춘 px)로 비트맵에 그린다. */
     private fun getBitmapFromVector(context: Context, drawableId: Int): Bitmap {
+        val fallback = SearchCatalog.dpToPx(20, resources.displayMetrics.density)
         val drawable = ContextCompat.getDrawable(context, drawableId)
-            ?: return Bitmap.createBitmap(48, 48, Bitmap.Config.ARGB_8888)
-        val bitmap = Bitmap.createBitmap(48, 48, Bitmap.Config.ARGB_8888)
+            ?: return Bitmap.createBitmap(fallback, fallback, Bitmap.Config.ARGB_8888)
+        val w = drawable.intrinsicWidth.takeIf { it > 0 } ?: fallback
+        val h = drawable.intrinsicHeight.takeIf { it > 0 } ?: fallback
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
         drawable.setBounds(0, 0, canvas.width, canvas.height)
         drawable.draw(canvas)
@@ -859,28 +850,48 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleShareResult(result: LocationShareViewModel.ShareResult) {
         if (isFinishing || isDestroyed) return
+        // 공유를 누르고 홈으로 나갔다가 한참 뒤 돌아왔으면 그때의 결과로 공유 시트를 띄우지 않는다(#18).
+        if (!SearchCatalog.isShareResultFresh(result.createdAtMs, SystemClock.elapsedRealtime())) {
+            Toast.makeText(this, "시간이 지나 위치 공유를 취소했습니다. 다시 공유하려면 「위치 공유」를 눌러 주세요.", Toast.LENGTH_LONG).show()
+            return
+        }
         when (result) {
             is LocationShareViewModel.ShareResult.Ready ->
                 startShareChooser(result.kind, result.latitude, result.longitude)
-            LocationShareViewModel.ShareResult.NoFix ->
+            is LocationShareViewModel.ShareResult.NoFix ->
                 showNoFixDialog("현재 위치를 확인하지 못했습니다. 위치(GPS)가 켜져 있는지 확인해 주세요.")
         }
     }
 
+    /**
+     * 현재 위치를 보낼 수 없을 때. 지도가 있으면(또는 아직 준비 중이면) 「지도에서 고른 위치」 공유를 권한다.
+     * 위치는 버튼을 누를 때의 지도 중앙을 쓴다 — 화면이 다시 만들어진 직후 지도가 아직 준비되지 않았어도
+     * 버튼이 빠지지 않게 한다(1.0.9 QA 관찰). 지도 자체가 오류로 뜨지 않았으면 권하지 않는다.
+     */
     private fun showNoFixDialog(reason: String) {
-        val center = kakaoMap?.cameraPosition?.position
-        val builder = AlertDialog.Builder(this)
-            .setTitle("현재 위치를 보낼 수 없습니다")
-            .setNegativeButton("취소", null)
-        if (center == null) {
-            builder.setMessage(reason).show()
+        if (mapFailed && kakaoMap == null) {
+            AppDialog.show(
+                supportFragmentManager, DLG_NO_FIX, "현재 위치를 보낼 수 없습니다", reason,
+                negative = AppDialog.Button("취소")
+            )
             return
         }
-        builder.setMessage("$reason\n\n대신 지도에서 고른 위치(화면 중앙)를 보낼 수 있습니다. 이 경우 \"현재 위치\"가 아니라 \"지도에서 고른 위치\"로 표시됩니다.")
-            .setPositiveButton("지도에서 고른 위치 공유") { _, _ ->
-                startShareChooser(ShareKind.MAP_PICKED, center.latitude, center.longitude)
-            }
-            .show()
+        AppDialog.show(
+            supportFragmentManager, DLG_NO_FIX, "현재 위치를 보낼 수 없습니다",
+            "$reason\n\n대신 지도에서 고른 위치(화면 중앙)를 보낼 수 있습니다. 이 경우 \"현재 위치\"가 아니라 \"지도에서 고른 위치\"로 표시됩니다.",
+            positive = AppDialog.Button("지도에서 고른 위치 공유", AppDialog.Action.SHARE_MAP_PICKED),
+            negative = AppDialog.Button("취소")
+        )
+    }
+
+    /** 「지도에서 고른 위치 공유」: 지금 지도 중앙을 보낸다. 지도가 아직 없으면 잠시 뒤 다시 하도록 알린다. */
+    private fun shareMapCenter() {
+        val center = kakaoMap?.cameraPosition?.position
+        if (center == null) {
+            Toast.makeText(this, "지도가 아직 준비되지 않았습니다. 잠시 후 다시 「위치 공유」를 눌러 주세요.", Toast.LENGTH_LONG).show()
+            return
+        }
+        startShareChooser(ShareKind.MAP_PICKED, center.latitude, center.longitude)
     }
 
     private fun startShareChooser(kind: ShareKind, lat: Double, lng: Double) {
