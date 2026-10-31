@@ -22,10 +22,11 @@ Kotlin + Kakao Maps SDK v2 기반 안드로이드 앱. 내 위치를 지도에 �
 ```properties
 sdk.dir=/path/to/Android/Sdk
 KAKAO_MAP_API_KEY=<카카오 네이티브 앱 키>
-KAKAO_REST_API_KEY=<카카오 REST API 키>
 ```
 
-`KAKAO_REST_API_KEY`를 생략하면 `KAKAO_MAP_API_KEY` 값을 대신 사용한다(둘 다 없으면 빌드는 되지만 `DUMMY_KEY`로 채워져 지도·검색이 동작하지 않는다).
+빌드에 들어가는 카카오 키는 **네이티브 앱 키 하나**다. 지도 SDK 인증과 주변 검색(카카오 Local API) 모두 이 키를 쓰고, Local API 요청에는 `KA` 헤더로 앱의 서명 키 해시와 패키지명을 함께 보낸다. 그래서 카카오 개발자 콘솔의 Android 플랫폼에 패키지명과 키 해시(디버그 키·Play 앱 서명 키)가 등록되어 있어야 지도와 검색이 동작한다. REST API 키는 키 해시로 묶이지 않아 앱에 넣지 않는다. 키가 없으면 빌드는 되지만 `DUMMY_KEY`로 채워져 지도·검색이 동작하지 않는다.
+
+카카오 지도 SDK 버전은 `app/build.gradle.kts`의 `kakaoMapSdkVersion` 한 곳에서 정하고, `KA` 헤더의 `sdk/` 값도 여기서 가져온다.
 
 ### 디버그 빌드 설치
 

@@ -564,10 +564,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * 서명 키 해시(keyHash)를 이용해 Kakao KA 헤더를 조립한다.
+     * 서명 키 해시(keyHash)를 이용해 Kakao KA 헤더를 조립한다. Local API 는 네이티브 앱 키(KakaoAK)와
+     * 이 헤더의 키 해시·패키지명으로 인증된다(카카오 콘솔에 등록한 Android 플랫폼 정보와 맞아야 한다).
      */
     private fun buildKaHeader(): String {
-        val sdkVersion = "2.14.1"
+        // 지도 SDK 의존성과 같은 버전(app/build.gradle.kts 의 kakaoMapSdkVersion, #19)
+        val sdkVersion = BuildConfig.KAKAO_MAP_SDK_VERSION
         val osVersion = "android-${Build.VERSION.SDK_INT}"
         val pkgName = packageName
         val origin = keyHash
@@ -638,7 +640,7 @@ class MainActivity : AppCompatActivity() {
                 requestMethod = "GET"
                 connectTimeout = HTTP_TIMEOUT_MS
                 readTimeout = HTTP_TIMEOUT_MS
-                setRequestProperty("Authorization", "KakaoAK ${BuildConfig.KAKAO_REST_API_KEY}")
+                setRequestProperty("Authorization", "KakaoAK ${BuildConfig.KAKAO_MAP_API_KEY}")
                 setRequestProperty("KA", kaHeader)
             }
             val code = conn.responseCode
