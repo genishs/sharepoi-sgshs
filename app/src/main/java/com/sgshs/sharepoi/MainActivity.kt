@@ -143,6 +143,8 @@ class MainActivity : AppCompatActivity() {
     private fun silenceSdkLogsInRelease() {
         if (BuildConfig.DEBUG) return
         try {
+            // MapView re-applies these static fields when it is created, so set them as well.
+            MapLogger.ENABLE = false
             MapLogger.setLogEnable(false)
             MapLogger.setCommonLogEnable(false)
             MapLogger.setLabelLogEnable(false)
