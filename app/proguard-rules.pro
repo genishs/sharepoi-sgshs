@@ -15,3 +15,14 @@
 
 # Keep native method names (SDK JNI)
 -keepclasseswithmembernames class * { native <methods>; }
+
+# Release builds: drop android.util.Log v/d/i/w calls from every class, including the Kakao Maps SDK
+# (#35). The SDK logs the app key header, signing key hash, API URLs and map coordinates under tag
+# "K3fAApi" even in release. Needs R8 optimization (proguard-android-optimize.txt) and is a no-op
+# for native (JNI) logging. Error-level (Log.e) is kept for real crash diagnostics.
+-assumenosideeffects class android.util.Log {
+    public static int v(...);
+    public static int d(...);
+    public static int i(...);
+    public static int w(...);
+}
