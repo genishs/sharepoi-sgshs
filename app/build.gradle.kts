@@ -15,9 +15,9 @@ android {
         applicationId = "com.sgshs.sharepoi"
         minSdk = 26
         targetSdk = 36
-        // 1.0.9: 안정화 묶음(#8 #11 #13 #15 #29 #30 #32). 버전 정책(맨 뒤 = 빌드 번호 = versionCode). versionCode 9
-        versionCode = 9
-        versionName = "1.0.9"
+        // 1.0.10: 지도·검색 UX·키 구성·접근성(#18 #19 #20). 버전 정책(맨 뒤 = 빌드 번호 = versionCode). versionCode 10
+        versionCode = 10
+        versionName = "1.0.10"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
