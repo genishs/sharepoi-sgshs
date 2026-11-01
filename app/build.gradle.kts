@@ -15,9 +15,9 @@ android {
         applicationId = "com.sgshs.sharepoi"
         minSdk = 26
         targetSdk = 36
-        // 1.0.10: 지도·검색 UX·키 구성·접근성(#18 #19 #20). 버전 정책(맨 뒤 = 빌드 번호 = versionCode). versionCode 10
-        versionCode = 10
-        versionName = "1.0.10"
+        // 1.0.11: 릴리스 빌드에서 지도 SDK 진단 로그 차단(#35). versionCode 11
+        versionCode = 11
+        versionName = "1.0.11"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         
