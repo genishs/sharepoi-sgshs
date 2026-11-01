@@ -43,6 +43,7 @@ import com.google.android.gms.tasks.CancellationTokenSource
 import com.kakao.vectormap.KakaoMap
 import com.kakao.vectormap.KakaoMapReadyCallback
 import com.kakao.vectormap.KakaoMapSdk
+import com.kakao.vectormap.MapLogger
 import com.kakao.vectormap.MapAuthException
 import com.kakao.vectormap.MapLifeCycleCallback
 import com.kakao.vectormap.MapView
@@ -134,11 +135,34 @@ class MainActivity : AppCompatActivity() {
         const val PRECISE_HINT_MARKER = "precise_location_hint_shown"
     }
 
+    /**
+     * The Kakao Maps SDK logs from native code (tag K3fAApi: app key header, API URLs, map
+     * coordinates) even in release builds, which R8 cannot strip (#35). Its own switch turns
+     * that off; the library is loaded by [KakaoMapSdk.init], so call this right after it.
+     */
+    private fun silenceSdkLogsInRelease() {
+        if (BuildConfig.DEBUG) return
+        try {
+            // MapView re-applies these static fields when it is created, so set them as well.
+            MapLogger.ENABLE = false
+            MapLogger.setLogEnable(false)
+            MapLogger.setCommonLogEnable(false)
+            MapLogger.setLabelLogEnable(false)
+            MapLogger.setRouteLogEnable(false)
+            MapLogger.setShapeLogEnable(false)
+            MapLogger.setMapWidgetLogEnable(false)
+            MapLogger.setCameraLogEnable(false)
+        } catch (e: Throwable) {
+            // Not fatal: the SDK just keeps logging.
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
         // Initialize Kakao SDK before setContentView
         KakaoMapSdk.init(this, BuildConfig.KAKAO_MAP_API_KEY)
+        silenceSdkLogsInRelease()
 
         // 키 해시는 카카오 KA 헤더(buildKaHeader)에 쓰는 기능이라 계산은 그대로 하되, 로그는 디버그 빌드에서만 남긴다.
         if (BuildConfig.DEBUG) {
